@@ -40,8 +40,9 @@ Do not change this contract unless the README, tests, load test, and downstream 
 Business `key` rules:
 
 - Non-empty.
-- Max length `128`.
-- Allowed characters: `a-z`, `A-Z`, `0-9`, `_`, `-`, `.`.
+- Max length `128` UTF-8 bytes.
+- Treat the key as an opaque exact-match password/channel string, matching NVDA Remote behavior.
+- Do not trim, lowercase, normalize, or restrict symbols, spaces, or Unicode characters.
 
 TCP control behavior:
 

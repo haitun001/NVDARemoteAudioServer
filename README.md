@@ -15,6 +15,10 @@ The server does not capture, encode, decode, mix, resample, retransmit, or repai
 - Exposes a status TCP port protected by the fixed status key `audiostatus`.
 - Writes logs to stdout or to the file passed with `--log=...`.
 
+## Stream Key / Password
+
+The business `key` is handled like NVDA Remote handles its relay key: it is an opaque password/channel string and authentication is an exact string match. The server requires it to be non-empty and at most 128 UTF-8 bytes, but it does not trim, lowercase, normalize, or reject spaces, symbols, or Unicode characters.
+
 ## Ports And Arguments
 
 Defaults:

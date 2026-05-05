@@ -192,13 +192,10 @@ pub fn validate_key(key: &str) -> Result<(), &'static str> {
         return Err("key is too long");
     }
 
-    if !key
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
-    {
-        return Err("key contains invalid characters");
-    }
-
+    // NVDA Remote treats its key as an opaque channel/password string and
+    // authenticates by exact match. Keep this server compatible by avoiding
+    // character whitelists, trimming, case folding, or Unicode normalization.
+    // The length limit is only a server-side bound for request/log/state size.
     Ok(())
 }
 
@@ -442,7 +439,7 @@ pub fn parse_udp_packet(
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientRole, ControlMessageRequest, HandshakeRequest, SessionId, UdpPacket,
+        ClientRole, ControlMessageRequest, HandshakeRequest, MAX_KEY_LEN, SessionId, UdpPacket,
         encode_udp_audio_data, encode_udp_heartbeat, encode_udp_register, parse_udp_packet,
         validate_key,
     };
@@ -451,13 +448,15 @@ mod tests {
     fn accepts_valid_key() {
         assert!(validate_key("123ddd").is_ok());
         assert!(validate_key("stream_01.test-key").is_ok());
+        assert!(validate_key("hello world").is_ok());
+        assert!(validate_key("bad$key").is_ok());
+        assert!(validate_key("NVDA remote 密码 $ 123").is_ok());
     }
 
     #[test]
     fn rejects_invalid_key() {
         assert!(validate_key("").is_err());
-        assert!(validate_key("hello world").is_err());
-        assert!(validate_key("bad$key").is_err());
+        assert!(validate_key(&"a".repeat(MAX_KEY_LEN + 1)).is_err());
     }
 
     #[test]

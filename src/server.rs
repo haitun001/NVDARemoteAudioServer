@@ -728,11 +728,14 @@ mod tests {
     #[tokio::test]
     async fn forwards_udp_audio_after_control_authentication() {
         let (server_handle, control_addr, status_addr) = start_server().await;
+        // NVDA Remote accepts its key as an opaque exact-match password/channel,
+        // so the end-to-end path must work with spaces, symbols, and Unicode.
+        let key = "NVDA remote 密码 $ 123";
 
         let (mut publisher_writer, publisher_session_id, udp_port) =
-            connect_control(control_addr, ClientRole::Publisher, "room").await;
+            connect_control(control_addr, ClientRole::Publisher, key).await;
         let (mut subscriber_writer, subscriber_session_id, _) =
-            connect_control(control_addr, ClientRole::Subscriber, "room").await;
+            connect_control(control_addr, ClientRole::Subscriber, key).await;
         assert_eq!(udp_port, control_addr.port());
 
         let publisher_udp =
