@@ -136,6 +136,31 @@ target/release/NVDARemoteAudioServer
 
 ## Linux Deployment
 
+You have two practical ways to deploy on Linux. If you just want to run the server, use the GitHub Releases binary. If you want to audit or rebuild everything yourself, build from source first and then use the same deployment layout.
+
+### Linux: Deploy From GitHub Releases
+
+Open the latest release page:
+
+```text
+https://github.com/haitun001/NVDARemoteAudioServer/releases
+```
+
+Download `NVDARemoteAudioServer-linux-amd64.tar.gz` to the server, then unpack and install it:
+
+```bash
+mkdir -p /tmp/NVDARemoteAudioServer-release
+tar -xzf NVDARemoteAudioServer-linux-amd64.tar.gz -C /tmp/NVDARemoteAudioServer-release
+
+sudo mkdir -p /home/app/NVDARemoteAudioServer/logs
+sudo cp /tmp/NVDARemoteAudioServer-release/NVDARemoteAudioServer /home/app/NVDARemoteAudioServer/
+sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
+```
+
+If you downloaded the archive on another machine first, copy it to Linux with `scp`, SFTP, or your normal deployment tool. The binary in this package is built by GitHub Actions from the tagged source code.
+
+### Linux: Deploy A Locally Built Binary
+
 Recommended directory layout:
 
 ```bash
@@ -151,6 +176,14 @@ sudo mkdir -p /home/app/NVDARemoteAudioServer/logs
 sudo cp target/release/NVDARemoteAudioServer /home/app/NVDARemoteAudioServer/
 sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 ```
+
+If you built the Linux amd64 musl binary from Windows, use this source path instead:
+
+```bash
+target/x86_64-unknown-linux-musl/release/NVDARemoteAudioServer
+```
+
+### Linux: Install systemd
 
 Install the systemd unit:
 
@@ -177,6 +210,32 @@ sudo ufw allow 6839/tcp
 
 ## Windows Deployment
 
+You can deploy Windows builds from GitHub Releases or from a local source build. The executable is a normal console server, not a native Windows Service binary.
+
+### Windows: Deploy From GitHub Releases
+
+Open the latest release page:
+
+```text
+https://github.com/haitun001/NVDARemoteAudioServer/releases
+```
+
+Download `NVDARemoteAudioServer-windows-amd64.zip`, extract it, and copy the executable into a fixed directory:
+
+```powershell
+New-Item -ItemType Directory -Force C:\NVDARemoteAudioServer\logs
+Expand-Archive .\NVDARemoteAudioServer-windows-amd64.zip -DestinationPath C:\NVDARemoteAudioServer\release -Force
+Copy-Item C:\NVDARemoteAudioServer\release\NVDARemoteAudioServer.exe C:\NVDARemoteAudioServer\
+```
+
+Start it manually:
+
+```powershell
+C:\NVDARemoteAudioServer\NVDARemoteAudioServer.exe --port=6838 --sport=6839 --log=C:\NVDARemoteAudioServer\logs\server.log
+```
+
+### Windows: Deploy A Locally Built Binary
+
 For a simple foreground run:
 
 ```powershell
@@ -189,6 +248,8 @@ For a permanent Windows deployment, put the executable in a fixed directory:
 New-Item -ItemType Directory -Force C:\NVDARemoteAudioServer\logs
 Copy-Item .\target\release\NVDARemoteAudioServer.exe C:\NVDARemoteAudioServer\
 ```
+
+### Windows: Startup Notes
 
 This program is a normal console server, not a native Windows Service binary. Do not install it directly with `sc.exe create`, because Windows services need a Service Control Dispatcher. For startup at boot, use Task Scheduler or wrap it with a tool such as WinSW or NSSM.
 

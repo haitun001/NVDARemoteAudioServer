@@ -136,6 +136,31 @@ target/release/NVDARemoteAudioServer
 
 ## Linux 部署
 
+Linux 上有两种常用部署方式。只想直接运行服务时，建议从 GitHub Releases 下载二进制。希望自己审计或重建时，可以先从源码构建，再按同样的目录部署。
+
+### Linux：从 GitHub Releases 部署
+
+打开最新 Release 页面：
+
+```text
+https://github.com/haitun001/NVDARemoteAudioServer/releases
+```
+
+下载 `NVDARemoteAudioServer-linux-amd64.tar.gz` 到服务器，然后解压并安装：
+
+```bash
+mkdir -p /tmp/NVDARemoteAudioServer-release
+tar -xzf NVDARemoteAudioServer-linux-amd64.tar.gz -C /tmp/NVDARemoteAudioServer-release
+
+sudo mkdir -p /home/app/NVDARemoteAudioServer/logs
+sudo cp /tmp/NVDARemoteAudioServer-release/NVDARemoteAudioServer /home/app/NVDARemoteAudioServer/
+sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
+```
+
+如果你是在别的机器上下载的压缩包，可以用 `scp`、SFTP 或平时使用的部署工具复制到 Linux。这个压缩包里的二进制由 GitHub Actions 根据对应标签的源码构建。
+
+### Linux：部署本地构建的二进制
+
 推荐目录：
 
 ```bash
@@ -151,6 +176,14 @@ sudo mkdir -p /home/app/NVDARemoteAudioServer/logs
 sudo cp target/release/NVDARemoteAudioServer /home/app/NVDARemoteAudioServer/
 sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 ```
+
+如果是在 Windows 上构建的 Linux amd64 musl 二进制，源文件路径换成：
+
+```bash
+target/x86_64-unknown-linux-musl/release/NVDARemoteAudioServer
+```
+
+### Linux：安装 systemd 服务
 
 安装 systemd 服务：
 
@@ -177,6 +210,32 @@ sudo ufw allow 6839/tcp
 
 ## Windows 部署
 
+Windows 可以从 GitHub Releases 下载，也可以用本地源码构建出的 exe。注意：这个程序是普通控制台服务端，不是原生 Windows Service 程序。
+
+### Windows：从 GitHub Releases 部署
+
+打开最新 Release 页面：
+
+```text
+https://github.com/haitun001/NVDARemoteAudioServer/releases
+```
+
+下载 `NVDARemoteAudioServer-windows-amd64.zip`，解压后把 exe 放到固定目录：
+
+```powershell
+New-Item -ItemType Directory -Force C:\NVDARemoteAudioServer\logs
+Expand-Archive .\NVDARemoteAudioServer-windows-amd64.zip -DestinationPath C:\NVDARemoteAudioServer\release -Force
+Copy-Item C:\NVDARemoteAudioServer\release\NVDARemoteAudioServer.exe C:\NVDARemoteAudioServer\
+```
+
+手动启动：
+
+```powershell
+C:\NVDARemoteAudioServer\NVDARemoteAudioServer.exe --port=6838 --sport=6839 --log=C:\NVDARemoteAudioServer\logs\server.log
+```
+
+### Windows：部署本地构建的二进制
+
 前台直接运行：
 
 ```powershell
@@ -189,6 +248,8 @@ sudo ufw allow 6839/tcp
 New-Item -ItemType Directory -Force C:\NVDARemoteAudioServer\logs
 Copy-Item .\target\release\NVDARemoteAudioServer.exe C:\NVDARemoteAudioServer\
 ```
+
+### Windows：开机启动说明
 
 当前程序是普通控制台服务端，不是原生 Windows Service 程序。不要直接用 `sc.exe create` 安装，因为 Windows Service 需要实现 Service Control Dispatcher，普通 exe 直接注册通常会启动失败。
 
