@@ -99,6 +99,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -110,7 +113,15 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          COMMIT_SUBJECT="$(git log -1 --pretty=%s)"
+          {
+            echo "NVDARemoteAudioServer $TAG_NAME"
+            echo
+            echo "Changes:"
+            echo "- $COMMIT_SUBJECT"
+          } > release-notes.md
+
           gh release create "$TAG_NAME" artifacts/**/* \
             --repo "$REPOSITORY" \
             --title "NVDARemoteAudioServer $TAG_NAME" \
-            --notes "Automated release for $TAG_NAME."
+            --notes-file release-notes.md

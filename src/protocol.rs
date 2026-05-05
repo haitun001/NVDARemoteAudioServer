@@ -194,9 +194,19 @@ pub fn validate_key(key: &str) -> Result<(), &'static str> {
 
     // NVDA Remote treats its key as an opaque channel/password string and
     // authenticates by exact match. Keep this server compatible by avoiding
-    // character whitelists, trimming, case folding, or Unicode normalization.
-    // The length limit is only a server-side bound for request/log/state size.
+    // printable character whitelists, trimming, case folding, or Unicode
+    // normalization. Control characters are rejected because they can pollute
+    // line-oriented logs and operational tooling without adding useful
+    // password compatibility.
+    if key.chars().any(char::is_control) {
+        return Err("key contains control characters");
+    }
+
     Ok(())
+}
+
+pub fn escape_key_for_log(key: &str) -> String {
+    key.escape_debug().collect()
 }
 
 pub async fn read_json_line<T, R>(
@@ -440,8 +450,8 @@ pub fn parse_udp_packet(
 mod tests {
     use super::{
         ClientRole, ControlMessageRequest, HandshakeRequest, MAX_KEY_LEN, SessionId, UdpPacket,
-        encode_udp_audio_data, encode_udp_heartbeat, encode_udp_register, parse_udp_packet,
-        validate_key,
+        encode_udp_audio_data, encode_udp_heartbeat, encode_udp_register, escape_key_for_log,
+        parse_udp_packet, validate_key,
     };
 
     #[test]
@@ -457,6 +467,17 @@ mod tests {
     fn rejects_invalid_key() {
         assert!(validate_key("").is_err());
         assert!(validate_key(&"a".repeat(MAX_KEY_LEN + 1)).is_err());
+        assert!(validate_key("line\nbreak").is_err());
+        assert!(validate_key("tab\tkey").is_err());
+        assert!(validate_key("escape\u{1b}key").is_err());
+    }
+
+    #[test]
+    fn escapes_key_for_log_output() {
+        assert_eq!(
+            escape_key_for_log("line\nkey\t\u{1b}"),
+            "line\\nkey\\t\\u{1b}"
+        );
     }
 
     #[test]

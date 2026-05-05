@@ -42,7 +42,8 @@ Business `key` rules:
 - Non-empty.
 - Max length `128` UTF-8 bytes.
 - Treat the key as an opaque exact-match password/channel string, matching NVDA Remote behavior.
-- Do not trim, lowercase, normalize, or restrict symbols, spaces, or Unicode characters.
+- Do not trim, lowercase, normalize, or restrict printable symbols, spaces, or Unicode characters.
+- Reject control characters because keys are logged and exposed through line-oriented operational tools.
 
 TCP control behavior:
 

@@ -17,7 +17,7 @@ The server does not capture, encode, decode, mix, resample, retransmit, or repai
 
 ## Stream Key / Password
 
-The business `key` is handled like NVDA Remote handles its relay key: it is an opaque password/channel string and authentication is an exact string match. The server requires it to be non-empty and at most 128 UTF-8 bytes, but it does not trim, lowercase, normalize, or reject spaces, symbols, or Unicode characters.
+The business `key` is handled like NVDA Remote handles its relay key: it is an opaque password/channel string and authentication is an exact string match. The server requires it to be non-empty and at most 128 UTF-8 bytes. It does not trim, lowercase, normalize, or reject printable spaces, symbols, or Unicode characters. Control characters are rejected because they can pollute logs and line-oriented operational tools.
 
 ## Ports And Arguments
 

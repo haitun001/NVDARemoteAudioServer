@@ -16,7 +16,8 @@ use crate::net::{UDP_SOCKET_BUFFER_BYTES, bind_udp_socket};
 use crate::protocol::{
     ClientRole, ControlMessageRequest, ControlMessageType, HandshakeRequest, HandshakeResponse,
     SessionId, StatusAccessRequest, StatusAccessResponse, UdpPacket, encode_udp_audio_data,
-    encode_udp_register_ack, parse_udp_packet, read_json_line, validate_key, write_json_line,
+    encode_udp_register_ack, escape_key_for_log, parse_udp_packet, read_json_line, validate_key,
+    write_json_line,
 };
 use crate::state::{
     AudioDispatchError, AudioDispatchPlan, RegisterSessionError, StreamRegistry, UdpHeartbeatError,
@@ -140,6 +141,7 @@ async fn handle_control_connection(
         };
 
     let session_hex = registration.session_id.to_hex();
+    let log_key = escape_key_for_log(&request.key);
     if let Err(err) = write_json_line(
         &mut stream,
         &HandshakeResponse {
@@ -162,7 +164,7 @@ async fn handle_control_connection(
 
     info!(
         peer_addr = %peer_addr,
-        key = %request.key,
+        key = %log_key,
         role = role_label(request.role),
         session_id = %session_hex,
         "control session connected"
@@ -176,7 +178,7 @@ async fn handle_control_connection(
         Ok(()) => {
             info!(
                 peer_addr = %peer_addr,
-                key = %request.key,
+                key = %log_key,
                 role = role_label(request.role),
                 session_id = %session_hex,
                 "control session disconnected"
@@ -186,7 +188,7 @@ async fn handle_control_connection(
         Err(err) => {
             warn!(
                 peer_addr = %peer_addr,
-                key = %request.key,
+                key = %log_key,
                 role = role_label(request.role),
                 session_id = %session_hex,
                 error = %err,
@@ -256,9 +258,10 @@ async fn run_udp_server(socket: Arc<UdpSocket>, registry: StreamRegistry) -> io:
                 }
 
                 if let Some((role, key)) = registry.session_role_and_key(session_id) {
+                    let log_key = escape_key_for_log(&key);
                     info!(
                         peer_addr = %peer_addr,
-                        key = %key,
+                        key = %log_key,
                         role = role_label(role),
                         session_id = %session_id.to_hex(),
                         "udp session registered"
@@ -529,7 +532,7 @@ async fn run_audio_dispatch_worker(
                     send_errors += 1;
                     warn!(
                         worker_index,
-                        key = %job.key,
+                        key = %escape_key_for_log(&job.key),
                         session_id = %target.session_id.to_hex(),
                         error = %err,
                         "failed to encode forwarded udp audio packet"
@@ -544,7 +547,7 @@ async fn run_audio_dispatch_worker(
                     send_errors += 1;
                     warn!(
                         worker_index,
-                        key = %job.key,
+                        key = %escape_key_for_log(&job.key),
                         target_addr = %target.endpoint,
                         session_id = %target.session_id.to_hex(),
                         sent,
@@ -556,7 +559,7 @@ async fn run_audio_dispatch_worker(
                     send_errors += 1;
                     warn!(
                         worker_index,
-                        key = %job.key,
+                        key = %escape_key_for_log(&job.key),
                         target_addr = %target.endpoint,
                         session_id = %target.session_id.to_hex(),
                         error = %err,
@@ -616,7 +619,7 @@ mod tests {
     use std::time::Duration;
 
     use serde::Serialize;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpStream, UdpSocket};
     use tokio::task::JoinHandle;
     use tokio::time::{sleep, timeout};
@@ -904,6 +907,32 @@ mod tests {
 
         assert_eq!(response.status, "error");
         assert_eq!(response.message, "invalid status key");
+
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn rejects_control_character_key_from_json_handshake() {
+        let (server_handle, control_addr, _status_addr) = start_server().await;
+
+        let mut stream = TcpStream::connect(control_addr).await.unwrap();
+        write_json_line(
+            &mut stream,
+            &HandshakeRequest {
+                role: ClientRole::Publisher,
+                key: "line\nbreak".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut buffer = [0_u8; 1];
+        let read = timeout(Duration::from_secs(2), stream.read(&mut buffer))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, 0);
 
         server_handle.abort();
         let _ = server_handle.await;
