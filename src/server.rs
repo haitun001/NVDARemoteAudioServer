@@ -639,27 +639,78 @@ mod tests {
         message_type: &'static str,
     }
 
-    fn alloc_port() -> u16 {
+    fn alloc_tcp_port() -> u16 {
         let listener =
             std::net::TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
                 .expect("port allocation should succeed");
         listener.local_addr().unwrap().port()
     }
 
+    fn alloc_control_port() -> u16 {
+        for _ in 0..100 {
+            let listener = std::net::TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::LOCALHOST,
+                0,
+            )))
+            .expect("tcp port allocation should succeed");
+            let port = listener.local_addr().unwrap().port();
+
+            if std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::LOCALHOST,
+                port,
+            )))
+            .is_ok()
+            {
+                return port;
+            }
+        }
+
+        panic!("control port allocation should find a TCP and UDP free port");
+    }
+
+    async fn wait_for_server_ready(
+        control_addr: SocketAddr,
+        handle: &JoinHandle<io::Result<()>>,
+    ) -> bool {
+        for _ in 0..50 {
+            if handle.is_finished() {
+                return false;
+            }
+
+            if TcpStream::connect(control_addr).await.is_ok() {
+                // This readiness probe is intentionally a plain TCP connect.
+                // Dropping it keeps the test from creating a control session.
+                return true;
+            }
+
+            sleep(Duration::from_millis(20)).await;
+        }
+
+        false
+    }
+
     async fn start_server() -> (JoinHandle<io::Result<()>>, SocketAddr, SocketAddr) {
-        let port = alloc_port();
-        let status_port = alloc_port();
-        let control_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
-        let status_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, status_port));
+        for _ in 0..20 {
+            let port = alloc_control_port();
+            let status_port = alloc_tcp_port();
+            let control_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
+            let status_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, status_port));
 
-        let handle = tokio::spawn(run(Config {
-            bind_addr: control_addr,
-            status_bind_addr: status_addr,
-            log_path: None,
-        }));
+            let handle = tokio::spawn(run(Config {
+                bind_addr: control_addr,
+                status_bind_addr: status_addr,
+                log_path: None,
+            }));
 
-        sleep(Duration::from_millis(100)).await;
-        (handle, control_addr, status_addr)
+            if wait_for_server_ready(control_addr, &handle).await {
+                return (handle, control_addr, status_addr);
+            }
+
+            handle.abort();
+            let _ = handle.await;
+        }
+
+        panic!("test server should start on an available port");
     }
 
     async fn connect_control(
