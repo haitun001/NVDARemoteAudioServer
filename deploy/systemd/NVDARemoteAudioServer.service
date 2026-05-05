@@ -1,0 +1,20 @@
+[Unit]
+Description=NVDARemoteAudioServer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/app/NVDARemoteAudioServer
+ExecStartPre=/usr/bin/mkdir -p /home/app/NVDARemoteAudioServer/logs
+ExecStart=/home/app/NVDARemoteAudioServer/NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioServer/logs/NVDARemoteAudioServer.log
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+LimitNOFILE=131072
+UMask=027
+
+[Install]
+WantedBy=multi-user.target

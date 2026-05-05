@@ -1,0 +1,25 @@
+[package]
+name = "nvdaremoteaudio_server"
+version = "0.1.0"
+edition = "2024"
+default-run = "NVDARemoteAudioServer"
+license = "GPL-2.0-only"
+readme = "README.md"
+
+[[bin]]
+name = "NVDARemoteAudioServer"
+path = "src/main.rs"
+
+[[bin]]
+name = "NVDARemoteAudioServer_load_test"
+path = "src/bin/NVDARemoteAudioServer_load_test.rs"
+
+[dependencies]
+getrandom = "0.3.4"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+socket2 = "0.6.1"
+tokio = { version = "1.48.0", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.20", features = ["fmt"] }

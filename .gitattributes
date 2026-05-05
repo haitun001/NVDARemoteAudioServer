@@ -1,0 +1,7 @@
+* text=auto
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+LICENSE text eol=lf
+*.service text eol=lf
+*.cmd text eol=crlf
