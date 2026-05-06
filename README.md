@@ -39,6 +39,15 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 
 ## Build On Linux
 
+Prepare a Debian-family build machine first:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl git
+```
+
+If you are already logged in as `root`, run the same commands without `sudo`. If you are not `root`, keep `sudo`.
+
 Install Rust first:
 
 ```bash
@@ -49,6 +58,7 @@ source "$HOME/.cargo/env"
 Build the release binary:
 
 ```bash
+git clone https://github.com/haitun001/NVDARemoteAudioServer.git
 cd NVDARemoteAudioServer
 cargo build --release --bin NVDARemoteAudioServer
 ```
@@ -142,6 +152,8 @@ target/release/NVDARemoteAudioServer
 
 You have two practical ways to deploy on Linux. If you just want to run the server, use the GitHub Releases binary. If you want to audit or rebuild everything yourself, build from source first and then use the same deployment layout.
 
+The Linux commands below use `sudo`. If you are already logged in as `root`, run the same commands without `sudo`. If you are not `root`, keep `sudo`.
+
 ### Linux: Deploy From GitHub Releases
 
 Open the latest release page:
@@ -153,6 +165,10 @@ https://github.com/haitun001/NVDARemoteAudioServer/releases
 Download `NVDARemoteAudioServer-linux-amd64.tar.gz` to the server, then unpack and install it:
 
 ```bash
+mkdir -p /tmp/NVDARemoteAudioServer-download
+cd /tmp/NVDARemoteAudioServer-download
+curl -L -o NVDARemoteAudioServer-linux-amd64.tar.gz https://github.com/haitun001/NVDARemoteAudioServer/releases/latest/download/NVDARemoteAudioServer-linux-amd64.tar.gz
+
 mkdir -p /tmp/NVDARemoteAudioServer-release
 tar -xzf NVDARemoteAudioServer-linux-amd64.tar.gz -C /tmp/NVDARemoteAudioServer-release
 

@@ -39,6 +39,15 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 
 ## Linux 从源码构建
 
+先准备 Debian 系列构建环境：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl git
+```
+
+如果已经用 `root` 登录，可以去掉 `sudo` 直接执行同样的命令。如果不是 `root` 用户，请保留 `sudo`。
+
 先安装 Rust：
 
 ```bash
@@ -49,6 +58,7 @@ source "$HOME/.cargo/env"
 构建发布版：
 
 ```bash
+git clone https://github.com/haitun001/NVDARemoteAudioServer.git
 cd NVDARemoteAudioServer
 cargo build --release --bin NVDARemoteAudioServer
 ```
@@ -142,6 +152,8 @@ target/release/NVDARemoteAudioServer
 
 Linux 上有两种常用部署方式。只想直接运行服务时，建议从 GitHub Releases 下载二进制。希望自己审计或重建时，可以先从源码构建，再按同样的目录部署。
 
+下面的 Linux 命令使用了 `sudo`。如果已经用 `root` 登录，可以去掉 `sudo` 直接执行同样的命令。如果不是 `root` 用户，请保留 `sudo`。
+
 ### Linux：从 GitHub Releases 部署
 
 打开最新 Release 页面：
@@ -153,6 +165,10 @@ https://github.com/haitun001/NVDARemoteAudioServer/releases
 下载 `NVDARemoteAudioServer-linux-amd64.tar.gz` 到服务器，然后解压并安装：
 
 ```bash
+mkdir -p /tmp/NVDARemoteAudioServer-download
+cd /tmp/NVDARemoteAudioServer-download
+curl -L -o NVDARemoteAudioServer-linux-amd64.tar.gz https://github.com/haitun001/NVDARemoteAudioServer/releases/latest/download/NVDARemoteAudioServer-linux-amd64.tar.gz
+
 mkdir -p /tmp/NVDARemoteAudioServer-release
 tar -xzf NVDARemoteAudioServer-linux-amd64.tar.gz -C /tmp/NVDARemoteAudioServer-release
 
