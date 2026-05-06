@@ -43,7 +43,7 @@ Prepare a Debian-family build machine first:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y curl git
+sudo apt-get install -y curl git build-essential
 ```
 
 If you are already logged in as `root`, run the same commands without `sudo`. If you are not `root`, keep `sudo`.
@@ -51,7 +51,7 @@ If you are already logged in as `root`, run the same commands without `sudo`. If
 Install Rust first:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 ```
 
@@ -137,7 +137,7 @@ Inside Debian:
 
 ```bash
 cd /mnt/c/Users/Administrator/Documents/codex/RemoteAudio/NVDARemoteAudioServer
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 cargo build --release --bin NVDARemoteAudioServer
 ```
@@ -173,6 +173,7 @@ mkdir -p /tmp/NVDARemoteAudioServer-release
 tar -xzf NVDARemoteAudioServer-linux-amd64.tar.gz -C /tmp/NVDARemoteAudioServer-release
 
 sudo mkdir -p /home/app/NVDARemoteAudioServer/logs
+sudo systemctl stop NVDARemoteAudioServer 2>/dev/null || true
 sudo cp /tmp/NVDARemoteAudioServer-release/NVDARemoteAudioServer /home/app/NVDARemoteAudioServer/
 sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 ```
@@ -195,6 +196,7 @@ Copy the binary:
 
 ```bash
 sudo mkdir -p /home/app/NVDARemoteAudioServer/logs
+sudo systemctl stop NVDARemoteAudioServer 2>/dev/null || true
 sudo cp target/release/NVDARemoteAudioServer /home/app/NVDARemoteAudioServer/
 sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 ```

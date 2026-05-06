@@ -43,7 +43,7 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y curl git
+sudo apt-get install -y curl git build-essential
 ```
 
 如果已经用 `root` 登录，可以去掉 `sudo` 直接执行同样的命令。如果不是 `root` 用户，请保留 `sudo`。
@@ -51,7 +51,7 @@ sudo apt-get install -y curl git
 先安装 Rust：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 ```
 
@@ -137,7 +137,7 @@ wsl --install -d Debian
 
 ```bash
 cd /mnt/c/Users/Administrator/Documents/codex/RemoteAudio/NVDARemoteAudioServer
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 cargo build --release --bin NVDARemoteAudioServer
 ```
@@ -173,6 +173,7 @@ mkdir -p /tmp/NVDARemoteAudioServer-release
 tar -xzf NVDARemoteAudioServer-linux-amd64.tar.gz -C /tmp/NVDARemoteAudioServer-release
 
 sudo mkdir -p /home/app/NVDARemoteAudioServer/logs
+sudo systemctl stop NVDARemoteAudioServer 2>/dev/null || true
 sudo cp /tmp/NVDARemoteAudioServer-release/NVDARemoteAudioServer /home/app/NVDARemoteAudioServer/
 sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 ```
@@ -195,6 +196,7 @@ sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 
 ```bash
 sudo mkdir -p /home/app/NVDARemoteAudioServer/logs
+sudo systemctl stop NVDARemoteAudioServer 2>/dev/null || true
 sudo cp target/release/NVDARemoteAudioServer /home/app/NVDARemoteAudioServer/
 sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 ```
