@@ -177,6 +177,8 @@ sudo cp /tmp/NVDARemoteAudioServer-release/NVDARemoteAudioServer /home/app/NVDAR
 sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 ```
 
+发布压缩包里也包含 `README.md`、`README-ZHCN.md`、`LICENSE` 和 `deploy/systemd/NVDARemoteAudioServer.service`，解压后可以直接使用同一份说明和 systemd 服务文件。
+
 如果你是在别的机器上下载的压缩包，可以用 `scp`、SFTP 或平时使用的部署工具复制到 Linux。这个压缩包里的二进制由 GitHub Actions 根据对应标签的源码构建。
 
 ### Linux：部署本地构建的二进制

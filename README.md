@@ -177,6 +177,8 @@ sudo cp /tmp/NVDARemoteAudioServer-release/NVDARemoteAudioServer /home/app/NVDAR
 sudo chmod 755 /home/app/NVDARemoteAudioServer/NVDARemoteAudioServer
 ```
 
+The release archive also includes `README.md`, `README-ZHCN.md`, `LICENSE`, and `deploy/systemd/NVDARemoteAudioServer.service`, so you can use the same documentation and systemd unit after unpacking it.
+
 If you downloaded the archive on another machine first, copy it to Linux with `scp`, SFTP, or your normal deployment tool. The binary in this package is built by GitHub Actions from the tagged source code.
 
 ### Linux: Deploy A Locally Built Binary
