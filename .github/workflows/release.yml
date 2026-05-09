@@ -74,7 +74,7 @@ jobs:
           mkdir -p package
           cp target/${{ matrix.target }}/release/NVDARemoteAudioServer package/
           cp target/${{ matrix.target }}/release/NVDARemoteAudioServer_load_test package/
-          cp README.md README-ZHCN.md LICENSE package/
+          cp README.md README-ZHCN.md API.md API-ZHCN.md LICENSE package/
           mkdir -p package/deploy/systemd
           cp deploy/systemd/NVDARemoteAudioServer.service package/deploy/systemd/
           tar -czf ${{ matrix.archive }} -C package .
@@ -86,7 +86,7 @@ jobs:
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item target\${{ matrix.target }}\release\NVDARemoteAudioServer.exe package\
           Copy-Item target\${{ matrix.target }}\release\NVDARemoteAudioServer_load_test.exe package\
-          Copy-Item README.md, README-ZHCN.md, LICENSE package\
+          Copy-Item README.md, README-ZHCN.md, API.md, API-ZHCN.md, LICENSE package\
           New-Item -ItemType Directory -Force package\deploy\systemd | Out-Null
           Copy-Item deploy\systemd\NVDARemoteAudioServer.service package\deploy\systemd\
           Compress-Archive -Path package\* -DestinationPath ${{ matrix.archive }} -Force

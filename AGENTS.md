@@ -123,7 +123,7 @@ The CI workflow must:
 - Run format, clippy, and tests.
 - Build Linux amd64.
 - Build Windows amd64.
-- Package binaries with `README.md`, `README-ZHCN.md`, and `LICENSE`.
+- Package binaries with `README.md`, `README-ZHCN.md`, `API.md`, `API-ZHCN.md`, and `LICENSE`.
 - Create a GitHub Release from the pushed tag.
 
 Do not manually add release binaries to the repository.
@@ -137,22 +137,30 @@ Do not manually add release binaries to the repository.
 - Do not hold locks across `.await`.
 - Do not add blocking I/O inside async hot paths.
 - Do not add codec, audio, RTP, retry, retransmission, or buffering features to the server without a protocol decision.
-- Do not change defaults or packet layouts without updating tests and both README files.
+- Do not change defaults or packet layouts without updating tests and public documentation.
 - Do not weaken endpoint binding: UDP packets must match the registered source address and port.
 - Keep status output line-oriented JSON.
 - Keep log output useful for operations, but avoid high-volume per-packet logs unless they are error paths.
 
 ## Documentation Rules
 
-Update both documentation files together:
+Update all public documentation files together:
 
 - `README.md`
 - `README-ZHCN.md`
+- `API.md`
+- `API-ZHCN.md`
+
+Update both agent maintenance guides together:
+
+- `AGENTS.md`
+- `AGENTS-ZHCN.md`
 
 Whenever behavior changes, document:
 
 - CLI arguments.
 - Default ports.
+- Public TCP/UDP/status API behavior.
 - Deployment steps.
 - Status behavior.
 - Load test usage.
@@ -175,6 +183,7 @@ Before handing work back:
 - `git status --short` is understood and reported.
 - No `target/` or `dist/` directory is prepared for commit.
 - README and README-ZHCN are in sync.
+- API and API-ZHCN are in sync.
 - CI workflow still triggers on tag push.
 - The release tag flow is not broken.
 - All validation results are reported honestly.
