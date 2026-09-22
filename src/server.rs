@@ -14,10 +14,10 @@ use crate::config::{
 };
 use crate::net::{UDP_SOCKET_BUFFER_BYTES, bind_udp_socket};
 use crate::protocol::{
-    ClientRole, ControlMessageRequest, ControlMessageType, HandshakeRequest, HandshakeResponse,
-    SessionId, StatusAccessRequest, StatusAccessResponse, UdpPacket, encode_udp_audio_data,
-    encode_udp_register_ack, escape_key_for_log, parse_udp_packet, read_json_line, validate_key,
-    write_json_line,
+    AudioStream, ClientRole, ControlMessageRequest, ControlMessageType, HandshakeRequest,
+    HandshakeResponse, SessionId, StatusAccessRequest, StatusAccessResponse, UdpPacket,
+    encode_udp_audio_data, encode_udp_register_ack, escape_key_for_log, parse_udp_packet,
+    read_json_line, validate_key, write_json_line,
 };
 use crate::state::{
     AudioDispatchError, AudioDispatchPlan, RegisterSessionError, StreamRegistry, UdpHeartbeatError,
@@ -31,6 +31,7 @@ const MAX_UDP_DISPATCH_WORKERS: usize = 8;
 struct AudioDispatchJob {
     publisher_session_id: SessionId,
     key: String,
+    stream: AudioStream,
     sequence: u64,
     timestamp_ms: u64,
     payload: Vec<u8>,
@@ -107,38 +108,43 @@ async fn handle_control_connection(
     validate_key(&request.key)
         .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
 
-    let registration =
-        match registry.register_control_session(request.role, &request.key, peer_addr.clone()) {
-            Ok(registration) => registration,
-            Err(RegisterSessionError::PublisherAlreadyConnected) => {
-                write_json_line(
-                    &mut stream,
-                    &HandshakeResponse {
-                        status: "error",
-                        message: "publisher already connected for this key",
-                        role: None,
-                        key: Some(&request.key),
-                        session_id: None,
-                        udp_port: None,
-                        tcp_heartbeat_interval_ms: None,
-                        udp_session_timeout_ms: None,
-                        udp_audio_payload_max_bytes: None,
-                    },
-                )
-                .await?;
+    let registration = match registry.register_control_session(
+        request.role,
+        &request.key,
+        request.stream,
+        peer_addr.clone(),
+    ) {
+        Ok(registration) => registration,
+        Err(RegisterSessionError::PublisherAlreadyConnected) => {
+            write_json_line(
+                &mut stream,
+                &HandshakeResponse {
+                    status: "error",
+                    message: "publisher already connected for this key and stream",
+                    role: None,
+                    key: Some(&request.key),
+                    stream: Some(request.stream),
+                    session_id: None,
+                    udp_port: None,
+                    tcp_heartbeat_interval_ms: None,
+                    udp_session_timeout_ms: None,
+                    udp_audio_payload_max_bytes: None,
+                },
+            )
+            .await?;
 
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "publisher already connected for this key",
-                ));
-            }
-            Err(RegisterSessionError::SessionIdGeneration(err)) => {
-                return Err(io::Error::new(
-                    err.kind(),
-                    format!("failed to allocate session id: {err}"),
-                ));
-            }
-        };
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "publisher already connected for this key and stream",
+            ));
+        }
+        Err(RegisterSessionError::SessionIdGeneration(err)) => {
+            return Err(io::Error::new(
+                err.kind(),
+                format!("failed to allocate session id: {err}"),
+            ));
+        }
+    };
 
     let session_hex = registration.session_id.to_hex();
     let log_key = escape_key_for_log(&request.key);
@@ -149,6 +155,7 @@ async fn handle_control_connection(
             message: "control session established",
             role: Some(request.role),
             key: Some(&request.key),
+            stream: Some(request.stream),
             session_id: Some(&session_hex),
             udp_port: Some(udp_port),
             tcp_heartbeat_interval_ms: Some(TCP_HEARTBEAT_INTERVAL_MS),
@@ -165,6 +172,7 @@ async fn handle_control_connection(
     info!(
         peer_addr = %peer_addr,
         key = %log_key,
+        stream = ?request.stream,
         role = role_label(request.role),
         session_id = %session_hex,
         "control session connected"
@@ -179,6 +187,7 @@ async fn handle_control_connection(
             info!(
                 peer_addr = %peer_addr,
                 key = %log_key,
+                stream = ?request.stream,
                 role = role_label(request.role),
                 session_id = %session_hex,
                 "control session disconnected"
@@ -189,6 +198,7 @@ async fn handle_control_connection(
             warn!(
                 peer_addr = %peer_addr,
                 key = %log_key,
+                stream = ?request.stream,
                 role = role_label(request.role),
                 session_id = %session_hex,
                 error = %err,
@@ -257,12 +267,13 @@ async fn run_udp_server(socket: Arc<UdpSocket>, registry: StreamRegistry) -> io:
                     }
                 }
 
-                if let Some((role, key)) = registry.session_role_and_key(session_id) {
+                if let Some((role, key, stream)) = registry.session_role_key_stream(session_id) {
                     let log_key = escape_key_for_log(&key);
                     info!(
                         peer_addr = %peer_addr,
                         key = %log_key,
                         role = role_label(role),
+                        stream = ?stream,
                         session_id = %session_id.to_hex(),
                         "udp session registered"
                     );
@@ -452,6 +463,7 @@ impl AudioDispatchJob {
         Self {
             publisher_session_id: plan.publisher_session_id,
             key: plan.key,
+            stream: plan.stream,
             sequence,
             timestamp_ms,
             payload: payload.to_vec(),
@@ -482,7 +494,7 @@ impl AudioDispatchWorkers {
     }
 
     fn enqueue(&self, job: AudioDispatchJob) -> io::Result<()> {
-        let worker_index = dispatch_worker_index(&job.key, self.senders.len());
+        let worker_index = dispatch_worker_index(&job.key, job.stream, self.senders.len());
         match self.senders[worker_index].try_send(job) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Closed(_)) => Err(io::Error::new(
@@ -491,7 +503,8 @@ impl AudioDispatchWorkers {
             )),
             Err(mpsc::error::TrySendError::Full(job)) => {
                 self.registry.record_audio_dispatch_outcome(
-                    &job.key,
+                    job.key,
+                    job.stream,
                     job.payload.len(),
                     0,
                     job.targets.len(),
@@ -509,7 +522,12 @@ async fn run_audio_dispatch_worker(
     mut receiver: mpsc::Receiver<AudioDispatchJob>,
 ) {
     while let Some(job) = receiver.recv().await {
-        if !registry.session_matches(job.publisher_session_id, ClientRole::Publisher, &job.key) {
+        if !registry.session_matches(
+            job.publisher_session_id,
+            ClientRole::Publisher,
+            &job.key,
+            job.stream,
+        ) {
             continue;
         }
 
@@ -533,6 +551,7 @@ async fn run_audio_dispatch_worker(
                     warn!(
                         worker_index,
                         key = %escape_key_for_log(&job.key),
+                        stream = ?job.stream,
                         session_id = %target.session_id.to_hex(),
                         error = %err,
                         "failed to encode forwarded udp audio packet"
@@ -548,6 +567,7 @@ async fn run_audio_dispatch_worker(
                     warn!(
                         worker_index,
                         key = %escape_key_for_log(&job.key),
+                        stream = ?job.stream,
                         target_addr = %target.endpoint,
                         session_id = %target.session_id.to_hex(),
                         sent,
@@ -560,6 +580,7 @@ async fn run_audio_dispatch_worker(
                     warn!(
                         worker_index,
                         key = %escape_key_for_log(&job.key),
+                        stream = ?job.stream,
                         target_addr = %target.endpoint,
                         session_id = %target.session_id.to_hex(),
                         error = %err,
@@ -570,7 +591,8 @@ async fn run_audio_dispatch_worker(
         }
 
         registry.record_audio_dispatch_outcome(
-            &job.key,
+            job.key,
+            job.stream,
             job.payload.len(),
             successful_targets,
             send_errors,
@@ -578,9 +600,10 @@ async fn run_audio_dispatch_worker(
     }
 }
 
-fn dispatch_worker_index(key: &str, worker_count: usize) -> usize {
+fn dispatch_worker_index(key: &str, stream: AudioStream, worker_count: usize) -> usize {
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
+    stream.hash(&mut hasher);
     (hasher.finish() as usize) % worker_count
 }
 
@@ -629,9 +652,9 @@ mod tests {
         UDP_AUDIO_PAYLOAD_MAX_BYTES, UDP_SESSION_TIMEOUT_MS,
     };
     use crate::protocol::{
-        HandshakeResponseOwned, SessionId, StatusAccessResponseOwned, encode_udp_audio_data,
-        encode_udp_heartbeat, encode_udp_register, parse_udp_packet, read_json_line,
-        write_json_line,
+        AudioStream, HandshakeResponseOwned, SessionId, StatusAccessResponseOwned,
+        encode_udp_audio_data, encode_udp_heartbeat, encode_udp_register, parse_udp_packet,
+        read_json_line, write_json_line,
     };
 
     use super::*;
@@ -720,6 +743,7 @@ mod tests {
         control_addr: SocketAddr,
         role: ClientRole,
         key: &str,
+        audio_stream: AudioStream,
     ) -> (tokio::net::tcp::OwnedWriteHalf, SessionId, u16) {
         let mut stream = TcpStream::connect(control_addr).await.unwrap();
         write_json_line(
@@ -727,6 +751,7 @@ mod tests {
             &HandshakeRequest {
                 role,
                 key: key.to_owned(),
+                stream: audio_stream,
             },
         )
         .await
@@ -745,6 +770,7 @@ mod tests {
         assert_eq!(response.message, "control session established");
         assert_eq!(response.role, Some(role));
         assert_eq!(response.key.as_deref(), Some(key));
+        assert_eq!(response.stream, Some(audio_stream));
         assert_eq!(
             response.tcp_heartbeat_interval_ms,
             Some(TCP_HEARTBEAT_INTERVAL_MS)
@@ -786,10 +812,20 @@ mod tests {
         // so the end-to-end path must work with spaces, symbols, and Unicode.
         let key = "NVDA remote 密码 $ 123";
 
-        let (mut publisher_writer, publisher_session_id, udp_port) =
-            connect_control(control_addr, ClientRole::Publisher, key).await;
-        let (mut subscriber_writer, subscriber_session_id, _) =
-            connect_control(control_addr, ClientRole::Subscriber, key).await;
+        let (mut publisher_writer, publisher_session_id, udp_port) = connect_control(
+            control_addr,
+            ClientRole::Publisher,
+            key,
+            AudioStream::SystemAudio,
+        )
+        .await;
+        let (mut subscriber_writer, subscriber_session_id, _) = connect_control(
+            control_addr,
+            ClientRole::Subscriber,
+            key,
+            AudioStream::SystemAudio,
+        )
+        .await;
         assert_eq!(udp_port, control_addr.port());
 
         let publisher_udp =
@@ -883,6 +919,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn isolates_audio_streams_with_the_same_key() {
+        let (server_handle, control_addr, _status_addr) = start_server().await;
+        let key = "same-key";
+        let system_stream = AudioStream::SystemAudio;
+        let voice_stream = AudioStream::VoiceControlledToController;
+
+        let (mut system_publisher_writer, system_publisher_id, _) =
+            connect_control(control_addr, ClientRole::Publisher, key, system_stream).await;
+        let (mut system_subscriber_writer, system_subscriber_id, _) =
+            connect_control(control_addr, ClientRole::Subscriber, key, system_stream).await;
+        let (mut voice_publisher_writer, voice_publisher_id, _) =
+            connect_control(control_addr, ClientRole::Publisher, key, voice_stream).await;
+        let (mut voice_subscriber_writer, voice_subscriber_id, _) =
+            connect_control(control_addr, ClientRole::Subscriber, key, voice_stream).await;
+
+        let system_publisher_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let system_subscriber_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let voice_publisher_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let voice_subscriber_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+
+        udp_register(&system_publisher_udp, control_addr, system_publisher_id).await;
+        udp_register(&system_subscriber_udp, control_addr, system_subscriber_id).await;
+        udp_register(&voice_publisher_udp, control_addr, voice_publisher_id).await;
+        udp_register(&voice_subscriber_udp, control_addr, voice_subscriber_id).await;
+
+        let system_packet = encode_udp_audio_data(
+            system_publisher_id,
+            1,
+            10,
+            b"system",
+            UDP_AUDIO_PAYLOAD_MAX_BYTES,
+        )
+        .unwrap();
+        let voice_packet = encode_udp_audio_data(
+            voice_publisher_id,
+            2,
+            20,
+            b"voice",
+            UDP_AUDIO_PAYLOAD_MAX_BYTES,
+        )
+        .unwrap();
+        system_publisher_udp
+            .send_to(&system_packet, control_addr)
+            .await
+            .unwrap();
+        voice_publisher_udp
+            .send_to(&voice_packet, control_addr)
+            .await
+            .unwrap();
+
+        let mut buffer = [0_u8; UDP_PACKET_MAX_BYTES];
+        let (len, _) = timeout(
+            Duration::from_secs(2),
+            system_subscriber_udp.recv_from(&mut buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            parse_udp_packet(&buffer[..len], UDP_AUDIO_PAYLOAD_MAX_BYTES).unwrap(),
+            UdpPacket::AudioData {
+                session_id: system_subscriber_id,
+                sequence: 1,
+                timestamp_ms: 10,
+                payload: b"system",
+            }
+        );
+
+        let (len, _) = timeout(
+            Duration::from_secs(2),
+            voice_subscriber_udp.recv_from(&mut buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            parse_udp_packet(&buffer[..len], UDP_AUDIO_PAYLOAD_MAX_BYTES).unwrap(),
+            UdpPacket::AudioData {
+                session_id: voice_subscriber_id,
+                sequence: 2,
+                timestamp_ms: 20,
+                payload: b"voice",
+            }
+        );
+
+        assert!(
+            timeout(
+                Duration::from_millis(250),
+                system_subscriber_udp.recv_from(&mut buffer),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            timeout(
+                Duration::from_millis(250),
+                voice_subscriber_udp.recv_from(&mut buffer),
+            )
+            .await
+            .is_err()
+        );
+
+        system_publisher_writer.shutdown().await.unwrap();
+        system_subscriber_writer.shutdown().await.unwrap();
+        voice_publisher_writer.shutdown().await.unwrap();
+        voice_subscriber_writer.shutdown().await.unwrap();
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
     async fn rejects_invalid_status_key() {
         let (server_handle, _control_addr, status_addr) = start_server().await;
 
@@ -922,6 +1069,7 @@ mod tests {
             &HandshakeRequest {
                 role: ClientRole::Publisher,
                 key: "line\nbreak".to_owned(),
+                stream: AudioStream::SystemAudio,
             },
         )
         .await
@@ -941,8 +1089,13 @@ mod tests {
     #[tokio::test]
     async fn control_connection_times_out_without_heartbeat() {
         let (server_handle, control_addr, _status_addr) = start_server().await;
-        let (writer, _session_id, _) =
-            connect_control(control_addr, ClientRole::Subscriber, "room").await;
+        let (writer, _session_id, _) = connect_control(
+            control_addr,
+            ClientRole::Subscriber,
+            "room",
+            AudioStream::SystemAudio,
+        )
+        .await;
 
         sleep(Duration::from_millis(CONTROL_IDLE_TIMEOUT_MS + 500)).await;
         drop(writer);
@@ -955,10 +1108,20 @@ mod tests {
     async fn requires_reregister_after_udp_source_port_change() {
         let (server_handle, control_addr, _status_addr) = start_server().await;
 
-        let (mut publisher_writer, publisher_session_id, _) =
-            connect_control(control_addr, ClientRole::Publisher, "room").await;
-        let (mut subscriber_writer, subscriber_session_id, _) =
-            connect_control(control_addr, ClientRole::Subscriber, "room").await;
+        let (mut publisher_writer, publisher_session_id, _) = connect_control(
+            control_addr,
+            ClientRole::Publisher,
+            "room",
+            AudioStream::SystemAudio,
+        )
+        .await;
+        let (mut subscriber_writer, subscriber_session_id, _) = connect_control(
+            control_addr,
+            ClientRole::Subscriber,
+            "room",
+            AudioStream::SystemAudio,
+        )
+        .await;
 
         let publisher_udp_a =
             UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
@@ -1064,10 +1227,20 @@ mod tests {
     async fn control_disconnect_immediately_invalidates_udp_session() {
         let (server_handle, control_addr, _status_addr) = start_server().await;
 
-        let (mut publisher_writer, publisher_session_id, _) =
-            connect_control(control_addr, ClientRole::Publisher, "room").await;
-        let (mut subscriber_writer, subscriber_session_id, _) =
-            connect_control(control_addr, ClientRole::Subscriber, "room").await;
+        let (mut publisher_writer, publisher_session_id, _) = connect_control(
+            control_addr,
+            ClientRole::Publisher,
+            "room",
+            AudioStream::SystemAudio,
+        )
+        .await;
+        let (mut subscriber_writer, subscriber_session_id, _) = connect_control(
+            control_addr,
+            ClientRole::Subscriber,
+            "room",
+            AudioStream::SystemAudio,
+        )
+        .await;
 
         let publisher_udp =
             UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))

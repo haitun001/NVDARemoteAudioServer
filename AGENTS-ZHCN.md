@@ -10,9 +10,10 @@
 
 - 通过 TCP 控制会话认证客户端。
 - 保持 TCP 控制心跳。
-- 按业务 `key` 路由数据流。
-- 保证同一个 `key` 只允许一个推流端。
-- 允许同一个 `key` 有多个拉流端。
+- 按 `(key, stream)` 路由数据流。
+- 保证同一个 `(key, stream)` 只允许一个推流端。
+- 允许同一个 `(key, stream)` 有多个拉流端。
+- 支持的流为 `system_audio`、`voice_controlled_to_controller` 和 `voice_controller_to_controlled`。
 - 按 `session_id` 注册 UDP 端点。
 - 将一个推流端的 UDP 音频包转发给活跃拉流端。
 - 在独立 TCP 状态端口暴露状态统计。
@@ -49,7 +50,8 @@ TCP 控制行为：
 
 - 客户端连接后立即发送一行以 `\n` 结尾的 JSON。
 - 角色为 `publisher` 或 `subscriber`。
-- 成功响应包含 `status`、`role`、`key`、`session_id`、`udp_port`、`tcp_heartbeat_interval_ms`、`udp_session_timeout_ms` 和 `udp_audio_payload_max_bytes`。
+- `stream` 为必填字段，用于指定三条支持的音频方向之一。
+- 成功响应包含 `status`、`role`、`key`、`stream`、`session_id`、`udp_port`、`tcp_heartbeat_interval_ms`、`udp_session_timeout_ms` 和 `udp_audio_payload_max_bytes`。
 - `session_id` 固定为 16 字节，序列化为 32 个十六进制字符。
 - 每个成功会话必须保持自己的 TCP 控制连接存活。
 - TCP 心跳 JSON 为 `{"type":"heartbeat"}`。
@@ -64,7 +66,7 @@ UDP 包布局：
 - `audio_data` 元数据使用 big-endian `u64` sequence 和 big-endian `u64` 毫秒 timestamp。
 - 推流端音频必须来自该 publisher 会话已注册的 UDP 端点。
 - Subscriber 会话绝不能被当作音频 publisher 接受。
-- 转发音频时，`sequence`、`timestamp_ms` 和 payload 保持不变，但 `session_id` 必须替换成目标 subscriber 的 session id。
+- 转发音频必须保持在同一个 `(key, stream)` 内；`sequence`、`timestamp_ms` 和 payload 保持不变，但 `session_id` 必须替换成目标 subscriber 的 session id。
 
 ## 仓库结构
 
@@ -93,7 +95,7 @@ cargo test
 如果修改了协议或网络逻辑，还要运行一次真实本地 TCP/UDP 压测：
 
 ```bash
-cargo run --release --bin NVDARemoteAudioServer_load_test -- --publishers=20 --subscribers-per-publisher=20 --packets-per-publisher=200 --payload-bytes=1200
+cargo run --release --bin NVDARemoteAudioServer_load_test -- --stream=system_audio --publishers=20 --subscribers-per-publisher=20 --packets-per-publisher=200 --payload-bytes=1200
 ```
 
 如果某个验证命令无法运行，必须明确说明跳过了哪个命令以及原因。
@@ -158,7 +160,7 @@ CI workflow 必须：
 
 只要行为发生变化，就要记录：
 
-- CLI 参数。
+- CLI 参数，包括压测工具的流选择参数。
 - 默认端口。
 - 公开 TCP/UDP/状态 API 行为。
 - 部署步骤。

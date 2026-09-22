@@ -9,7 +9,7 @@ use nvdaremoteaudio_server::config::{
     UDP_PACKET_MAX_BYTES, UDP_SESSION_TIMEOUT_MS,
 };
 use nvdaremoteaudio_server::protocol::{
-    ClientRole, ControlMessageRequest, ControlMessageType, HandshakeRequest,
+    AudioStream, ClientRole, ControlMessageRequest, ControlMessageType, HandshakeRequest,
     HandshakeResponseOwned, SessionId, StatusAccessRequest, encode_udp_audio_data,
     encode_udp_heartbeat, encode_udp_register, parse_udp_packet, read_json_line, write_json_line,
 };
@@ -48,6 +48,7 @@ struct LoadTestConfig {
     port: u16,
     status_port: u16,
     external_server: bool,
+    stream: AudioStream,
 }
 
 impl LoadTestConfig {
@@ -64,6 +65,7 @@ impl LoadTestConfig {
             port: DEFAULT_PORT,
             status_port: DEFAULT_STATUS_PORT,
             external_server: false,
+            stream: AudioStream::SystemAudio,
         };
 
         for arg in env::args().skip(1) {
@@ -75,6 +77,10 @@ impl LoadTestConfig {
                     ));
                 }
                 config.host = value.to_owned();
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--stream=") {
+                config.stream = parse_stream(value)?;
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--publishers=") {
@@ -121,7 +127,7 @@ impl LoadTestConfig {
             }
             if arg == "--help" || arg == "-h" {
                 return Err(io::Error::other(
-                    "usage: NVDARemoteAudioServer_load_test [--host=127.0.0.1] [--publishers=20] [--subscribers-per-publisher=20] [--packets-per-publisher=200] [--payload-bytes=160] [--packet-interval-ms=10] [--heartbeat-rounds=2] [--heartbeat-round-interval-ms=1000] [--port=6838] [--sport=6839] [--external-server]",
+                    "usage: NVDARemoteAudioServer_load_test [--host=127.0.0.1] [--stream=system_audio|voice_controlled_to_controller|voice_controller_to_controlled] [--publishers=20] [--subscribers-per-publisher=20] [--packets-per-publisher=200] [--payload-bytes=160] [--packet-interval-ms=10] [--heartbeat-rounds=2] [--heartbeat-round-interval-ms=1000] [--port=6838] [--sport=6839] [--external-server]",
                 ));
             }
 
@@ -270,7 +276,7 @@ async fn main() -> io::Result<()> {
     let mut subscribers = Vec::with_capacity(config.publishers * config.subscribers_per_publisher);
     for key_index in 0..config.publishers {
         let key = stream_key(key_index);
-        let publisher = connect_publisher(control_addr, key_index, &key)
+        let publisher = connect_publisher(control_addr, key_index, &key, config.stream)
             .await
             .map_err(|err| {
                 io::Error::other(format!(
@@ -286,6 +292,7 @@ async fn main() -> io::Result<()> {
                 &key,
                 config.packets_per_publisher,
                 config.payload_bytes,
+                config.stream,
             )
             .await
             .map_err(|err| {
@@ -408,9 +415,10 @@ async fn connect_publisher(
     control_addr: SocketAddr,
     key_index: usize,
     key: &str,
+    stream: AudioStream,
 ) -> io::Result<PublisherClient> {
     let (control_reader, control_heartbeat, session_id, udp_port) =
-        connect_control(control_addr, ClientRole::Publisher, key)
+        connect_control(control_addr, ClientRole::Publisher, key, stream)
             .await
             .map_err(|err| io::Error::other(format!("publisher control connect failed: {err}")))?;
     let socket = std::sync::Arc::new(
@@ -447,9 +455,10 @@ async fn connect_subscriber(
     key: &str,
     packets_per_publisher: usize,
     payload_bytes: usize,
+    stream: AudioStream,
 ) -> io::Result<SubscriberClient> {
     let (control_reader, control_heartbeat, session_id, udp_port) =
-        connect_control(control_addr, ClientRole::Subscriber, key)
+        connect_control(control_addr, ClientRole::Subscriber, key, stream)
             .await
             .map_err(|err| io::Error::other(format!("subscriber control connect failed: {err}")))?;
     let socket = std::sync::Arc::new(
@@ -504,6 +513,7 @@ async fn connect_control(
     control_addr: SocketAddr,
     role: ClientRole,
     key: &str,
+    stream_kind: AudioStream,
 ) -> io::Result<(
     tokio::net::tcp::OwnedReadHalf,
     HeartbeatTask,
@@ -516,6 +526,7 @@ async fn connect_control(
         &HandshakeRequest {
             role,
             key: key.to_owned(),
+            stream: stream_kind,
         },
     )
     .await?;
@@ -553,6 +564,12 @@ async fn connect_control(
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("handshake key mismatch for key {key}"),
+        ));
+    }
+    if response.stream != Some(stream_kind) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("handshake stream mismatch for key {key}"),
         ));
     }
     if response.tcp_heartbeat_interval_ms != Some(TCP_HEARTBEAT_INTERVAL_MS) {
@@ -937,6 +954,18 @@ fn generate_payload(key_index: usize, sequence: u64, payload_bytes: usize) -> Ve
 
 fn generate_timestamp_ms(key_index: usize, sequence: u64) -> u64 {
     1_760_000_000_000_u64 + (key_index as u64 * 1_000_000) + sequence
+}
+
+fn parse_stream(raw: &str) -> io::Result<AudioStream> {
+    match raw {
+        "system_audio" => Ok(AudioStream::SystemAudio),
+        "voice_controlled_to_controller" => Ok(AudioStream::VoiceControlledToController),
+        "voice_controller_to_controlled" => Ok(AudioStream::VoiceControllerToControlled),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("--stream has an unknown value: {raw}"),
+        )),
+    }
 }
 
 fn parse_usize(raw: &str, name: &str) -> io::Result<usize> {

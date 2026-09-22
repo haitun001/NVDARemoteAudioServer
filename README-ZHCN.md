@@ -1,13 +1,14 @@
 # NVDARemoteAudioServer
 
-NVDARemoteAudioServer 是一个用 Rust 写的低延迟远程音频转发服务端。它的职责很克制：TCP 负责认证和心跳，UDP 负责音频数据，服务端只按 key 做路由和分发。
+NVDARemoteAudioServer 是一个用 Rust 写的低延迟远程音频转发服务端。它的职责很克制：TCP 负责认证和心跳，UDP 负责音频数据，服务端只按 `(key, stream)` 做路由和分发。
 
 服务端不采集音频，不编码，不解码，不混音，不转码，也不做重传和排序修复。音频处理交给客户端，服务端就专心把链路跑稳。
 
 ## 它负责什么
 
-- 同一个 key 只允许一个推流端。
-- 同一个 key 可以有多个拉流端。
+- 同一个 `(key, stream)` 只允许一个推流端。
+- 同一个 `(key, stream)` 可以有多个拉流端。
+- 支持 `system_audio`、`voice_controlled_to_controller` 和 `voice_controller_to_controlled` 三条独立音频流；同一个 key 可以同时使用它们。
 - 每个客户端都要保持 TCP 控制连接。
 - UDP 端点必须先 register，收到 register_ack 后才算注册成功。
 - 推流端发来的 UDP 音频包会分发给已注册并且仍活跃的拉流端。
@@ -17,7 +18,7 @@ NVDARemoteAudioServer 是一个用 Rust 写的低延迟远程音频转发服务�
 
 ## 推流 key / 密码
 
-业务 `key` 按照 NVDA Remote 的中继 key 行为处理：它是一个不透明的密码/通道字符串，认证时只做原样精确匹配。服务端只要求它非空、最长 128 个 UTF-8 字节，不会自动去掉空格，不会转小写，不会做 Unicode 归一化，也不会拒绝可打印的空格、符号或中文等 Unicode 字符。控制字符会被拒绝，因为它们会污染日志和按行读取的运维工具。
+业务 `key` 按照 NVDA Remote 的中继 key 行为处理：它是一个不透明的密码/通道字符串，认证时只做原样精确匹配。每次握手还必须指定 `stream`；同一个 key 下三条流彼此独立，每条流各有一个推流端和多个拉流端。服务端只要求它非空、最长 128 个 UTF-8 字节，不会自动去掉空格，不会转小写，不会做 Unicode 归一化，也不会拒绝可打印的空格、符号或中文等 Unicode 字符。控制字符会被拒绝，因为它们会污染日志和按行读取的运维工具。
 
 ## 端口和启动参数
 
@@ -36,6 +37,8 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 - `--port=6838` 同时设置 TCP 控制端口和 UDP 数据端口。
 - `--sport=6839` 设置 TCP 状态端口。
 - `--log=/path/to/file.log` 把日志写到文件。不传这个参数时，日志输出到 stdout。
+
+压测工具的 `--stream` 只能是 `system_audio`、`voice_controlled_to_controller` 或 `voice_controller_to_controlled`，默认是 `system_audio`。
 
 ## Linux 从源码构建
 
@@ -307,7 +310,7 @@ Windows 防火墙需要放行 TCP/UDP `6838`。如果要从外部访问状态接
 本地启动服务并测试 20 个推流、每个推流 20 个拉流：
 
 ```bash
-cargo run --release --bin NVDARemoteAudioServer_load_test -- --publishers=20 --subscribers-per-publisher=20
+cargo run --release --bin NVDARemoteAudioServer_load_test -- --stream=system_audio --publishers=20 --subscribers-per-publisher=20
 ```
 
 测试已经运行中的服务：

@@ -10,9 +10,10 @@ The server is intentionally narrow:
 
 - Authenticate clients through TCP control sessions.
 - Keep TCP control heartbeats.
-- Route streams by business `key`.
-- Enforce one publisher per `key`.
-- Allow many subscribers per `key`.
+- Route streams by `(key, stream)`.
+- Enforce one publisher per `(key, stream)`.
+- Allow many subscribers per `(key, stream)`.
+- Supported streams are `system_audio`, `voice_controlled_to_controller`, and `voice_controller_to_controlled`.
 - Register UDP endpoints by `session_id`.
 - Forward UDP audio packets from one publisher to active subscribers.
 - Expose status statistics on a separate TCP status port.
@@ -49,7 +50,8 @@ TCP control behavior:
 
 - Client sends one JSON line ending in `\n` immediately after connect.
 - Role is `publisher` or `subscriber`.
-- Successful response includes `status`, `role`, `key`, `session_id`, `udp_port`, `tcp_heartbeat_interval_ms`, `udp_session_timeout_ms`, and `udp_audio_payload_max_bytes`.
+- `stream` is required and identifies one of the three supported audio directions.
+- Successful response includes `status`, `role`, `key`, `stream`, `session_id`, `udp_port`, `tcp_heartbeat_interval_ms`, `udp_session_timeout_ms`, and `udp_audio_payload_max_bytes`.
 - `session_id` is exactly 16 bytes serialized as 32 hexadecimal characters.
 - Each successful session must keep its TCP control connection alive.
 - TCP heartbeat JSON is `{"type":"heartbeat"}`.
@@ -64,7 +66,7 @@ UDP packet layout:
 - `audio_data` metadata uses big-endian `u64` sequence and big-endian `u64` timestamp in milliseconds.
 - Publisher audio must come from the registered UDP endpoint for the publisher session.
 - Subscriber sessions must never be accepted as audio publishers.
-- Forwarded audio keeps `sequence`, `timestamp_ms`, and payload unchanged, but replaces `session_id` with the target subscriber session id.
+- Forwarded audio stays within the same `(key, stream)`, keeps `sequence`, `timestamp_ms`, and payload unchanged, but replaces `session_id` with the target subscriber session id.
 
 ## Repository Layout
 
@@ -93,7 +95,7 @@ cargo test
 For protocol or networking changes, also run a real local TCP/UDP load test:
 
 ```bash
-cargo run --release --bin NVDARemoteAudioServer_load_test -- --publishers=20 --subscribers-per-publisher=20 --packets-per-publisher=200 --payload-bytes=1200
+cargo run --release --bin NVDARemoteAudioServer_load_test -- --stream=system_audio --publishers=20 --subscribers-per-publisher=20 --packets-per-publisher=200 --payload-bytes=1200
 ```
 
 If a validation command cannot be run, state exactly which command was skipped and why.
@@ -158,7 +160,7 @@ Update both agent maintenance guides together:
 
 Whenever behavior changes, document:
 
-- CLI arguments.
+- CLI arguments, including the load-test stream selector.
 - Default ports.
 - Public TCP/UDP/status API behavior.
 - Deployment steps.
