@@ -1,13 +1,14 @@
 # NVDARemoteAudioServer
 
-NVDARemoteAudioServer is a small Rust relay server for low-latency remote audio links. It keeps the server side intentionally simple: TCP is used for authentication and heartbeats, UDP is used for audio packets, and the server only routes packets by key.
+NVDARemoteAudioServer is a small Rust relay server for low-latency remote audio links. It keeps the server side intentionally simple: TCP is used for authentication and heartbeats, UDP is used for audio packets, and the server only routes packets by `(key, stream)`.
 
 The server does not capture, encode, decode, mix, resample, retransmit, or repair audio. Clients own all audio work. This keeps the server predictable under load and easier to operate for a long time.
 
 ## What It Does
 
-- Accepts one publisher per key.
-- Accepts many subscribers for the same key.
+- Accepts one publisher per `(key, stream)`.
+- Accepts many subscribers for the same `(key, stream)`.
+- Supports `system_audio`, `voice_controlled_to_controller`, and `voice_controller_to_controlled` as independent streams under one key.
 - Keeps each client alive through a TCP control session.
 - Registers each UDP endpoint before audio can flow.
 - Forwards UDP audio packets from the publisher to active subscribers.
@@ -17,7 +18,7 @@ The server does not capture, encode, decode, mix, resample, retransmit, or repai
 
 ## Stream Key / Password
 
-The business `key` is handled like NVDA Remote handles its relay key: it is an opaque password/channel string and authentication is an exact string match. The server requires it to be non-empty and at most 128 UTF-8 bytes. It does not trim, lowercase, normalize, or reject printable spaces, symbols, or Unicode characters. Control characters are rejected because they can pollute logs and line-oriented operational tools.
+The business `key` is handled like NVDA Remote handles its relay key: it is an opaque password/channel string and authentication is an exact string match. Each handshake also names an `AudioStream`; the same key can carry all three supported streams independently, with one publisher and many subscribers per stream. The server requires it to be non-empty and at most 128 UTF-8 bytes. It does not trim, lowercase, normalize, or reject printable spaces, symbols, or Unicode characters. Control characters are rejected because they can pollute logs and line-oriented operational tools.
 
 ## Ports And Arguments
 
@@ -36,6 +37,8 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 - `--port=6838` sets both TCP control and UDP data port.
 - `--sport=6839` sets the TCP status port.
 - `--log=/path/to/file.log` writes logs to a file. Without it, logs go to stdout.
+
+The load test `--stream` value must be one of `system_audio`, `voice_controlled_to_controller`, or `voice_controller_to_controlled`; it defaults to `system_audio`.
 
 ## Build On Linux
 
@@ -307,7 +310,7 @@ The response is one JSON line. Larger deployments can produce a large status sna
 Local test with 20 publishers and 20 subscribers per publisher:
 
 ```bash
-cargo run --release --bin NVDARemoteAudioServer_load_test -- --publishers=20 --subscribers-per-publisher=20
+cargo run --release --bin NVDARemoteAudioServer_load_test -- --stream=system_audio --publishers=20 --subscribers-per-publisher=20
 ```
 
 Against an already running server:
@@ -316,7 +319,7 @@ Against an already running server:
 cargo run --release --bin NVDARemoteAudioServer_load_test -- --host=127.0.0.1 --port=6838 --sport=6839 --external-server
 ```
 
-The tool uses real TCP sessions, real UDP register/heartbeat packets, real UDP audio packets, and validates that subscribers receive the expected payloads.
+The tool uses real TCP sessions, real UDP register/heartbeat packets, real UDP audio packets, and validates that subscribers receive the expected payloads. Use `--stream=voice_controlled_to_controller` or `--stream=voice_controller_to_controlled` to exercise the voice directions.
 
 ## License
 

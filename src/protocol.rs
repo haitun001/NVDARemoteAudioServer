@@ -21,10 +21,19 @@ pub enum ClientRole {
     Subscriber,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Ord, PartialEq, PartialOrd, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioStream {
+    SystemAudio,
+    VoiceControlledToController,
+    VoiceControllerToControlled,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct HandshakeRequest {
     pub role: ClientRole,
     pub key: String,
+    pub stream: AudioStream,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +44,8 @@ pub struct HandshakeResponse<'a> {
     pub role: Option<ClientRole>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<AudioStream>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,6 +64,7 @@ pub struct HandshakeResponseOwned {
     pub message: String,
     pub role: Option<ClientRole>,
     pub key: Option<String>,
+    pub stream: Option<AudioStream>,
     pub session_id: Option<String>,
     pub udp_port: Option<u16>,
     pub tcp_heartbeat_interval_ms: Option<u64>,
@@ -124,8 +136,10 @@ impl SessionId {
         }
 
         let mut bytes = [0_u8; SESSION_ID_BYTES];
-        for (index, chunk) in text.as_bytes().chunks_exact(2).enumerate() {
-            bytes[index] = (decode_hex_nibble(chunk[0])? << 4) | decode_hex_nibble(chunk[1])?;
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            let offset = index * 2;
+            *byte = (decode_hex_nibble(text.as_bytes()[offset])? << 4)
+                | decode_hex_nibble(text.as_bytes()[offset + 1])?;
         }
 
         Ok(Self(bytes))
@@ -449,9 +463,9 @@ pub fn parse_udp_packet(
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientRole, ControlMessageRequest, HandshakeRequest, MAX_KEY_LEN, SessionId, UdpPacket,
-        encode_udp_audio_data, encode_udp_heartbeat, encode_udp_register, escape_key_for_log,
-        parse_udp_packet, validate_key,
+        AudioStream, ClientRole, ControlMessageRequest, HandshakeRequest, MAX_KEY_LEN, SessionId,
+        UdpPacket, encode_udp_audio_data, encode_udp_heartbeat, encode_udp_register,
+        escape_key_for_log, parse_udp_packet, validate_key,
     };
 
     #[test]
@@ -526,9 +540,15 @@ mod tests {
     #[test]
     fn deserializes_control_messages() {
         let handshake: HandshakeRequest =
-            serde_json::from_str(r#"{"role":"publisher","key":"room"}"#).unwrap();
+            serde_json::from_str(r#"{"role":"publisher","key":"room","stream":"system_audio"}"#)
+                .unwrap();
         assert_eq!(handshake.role, ClientRole::Publisher);
         assert_eq!(handshake.key, "room");
+        assert_eq!(handshake.stream, AudioStream::SystemAudio);
+        assert!(
+            serde_json::from_str::<HandshakeRequest>(r#"{"role":"publisher","key":"room"}"#,)
+                .is_err()
+        );
 
         let heartbeat: ControlMessageRequest =
             serde_json::from_str(r#"{"type":"heartbeat"}"#).unwrap();

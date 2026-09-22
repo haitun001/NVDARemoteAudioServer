@@ -50,7 +50,7 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 
 ## Key 规则
 
-业务 `key` 是把一个推流端和多个拉流端绑定在一起的密码/通道字符串。
+业务 `key` 用于绑定推流端和拉流端；必填的 `stream` 指定独立的音频方向。路由和“一个推流端”的限制都作用于 `(key, stream)` 组合。
 
 规则：
 
@@ -62,6 +62,18 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 - 不能包含控制字符，例如换行、制表符、escape 或其他 Unicode 控制码位。
 
 客户端接入注意：把 key 当作普通 JSON 字符串编码。引号、反斜杠、Unicode 等转义应交给 JSON 编码器处理。
+
+## 音频流
+
+`stream` 为必填字段，只能使用以下值：
+
+| 值 | 方向 |
+| --- | --- |
+| `system_audio` | 被控端系统声音发送到控制端。 |
+| `voice_controlled_to_controller` | 被控端麦克风发送到控制端。 |
+| `voice_controller_to_controlled` | 控制端麦克风发送到被控端。 |
+
+每个 `(key, stream)` 允许一个推流端和任意多个拉流端。同一个 key 下的不同流不会收到彼此的包。
 
 ## TCP 控制 API
 
@@ -76,13 +88,13 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 推流端：
 
 ```json
-{"role":"publisher","key":"room-123"}
+{"role":"publisher","key":"room-123","stream":"system_audio"}
 ```
 
 拉流端：
 
 ```json
-{"role":"subscriber","key":"room-123"}
+{"role":"subscriber","key":"room-123","stream":"system_audio"}
 ```
 
 字段：
@@ -91,6 +103,7 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 | --- | --- | --- | --- |
 | `role` | string | 是 | `publisher` 或 `subscriber`。 |
 | `key` | string | 是 | 业务 key/密码/通道字符串。 |
+| `stream` | string | 是 | 支持的音频流值之一。 |
 
 请求帧格式：
 
@@ -105,7 +118,7 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 服务端返回一行 JSON：
 
 ```json
-{"status":"ok","message":"control session established","role":"publisher","key":"room-123","session_id":"00112233445566778899aabbccddeeff","udp_port":6838,"tcp_heartbeat_interval_ms":5000,"udp_session_timeout_ms":15000,"udp_audio_payload_max_bytes":1200}
+{"status":"ok","message":"control session established","role":"publisher","key":"room-123","stream":"system_audio","session_id":"00112233445566778899aabbccddeeff","udp_port":6838,"tcp_heartbeat_interval_ms":5000,"udp_session_timeout_ms":15000,"udp_audio_payload_max_bytes":1200}
 ```
 
 字段：
@@ -116,6 +129,7 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 | `message` | string | 人类可读状态信息。 |
 | `role` | string | 已接受的角色。 |
 | `key` | string | 已接受的 key。 |
+| `stream` | string | 已接受的音频流。 |
 | `session_id` | string | 32 个十六进制字符，表示 16 字节原始值。 |
 | `udp_port` | number | UDP register、UDP heartbeat 和 audio 使用的端口。 |
 | `tcp_heartbeat_interval_ms` | number | 推荐 TCP 心跳间隔。 |
@@ -126,10 +140,10 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 
 ### 握手失败行为
 
-如果同一个 `key` 已经有活跃 publisher，第二个 publisher 会被拒绝，并返回一行 JSON：
+如果同一个 `(key, stream)` 已经有活跃 publisher，第二个 publisher 会被拒绝，并返回一行 JSON：
 
 ```json
-{"status":"error","message":"publisher already connected for this key","key":"room-123"}
+{"status":"error","message":"publisher already connected for this key and stream","key":"room-123","stream":"system_audio"}
 ```
 
 其他错误握手、非法 key、非法 JSON、超长请求或超时，并不是稳定的 JSON 错误 API。客户端应把它们视为连接失败，修正请求后再重连。
@@ -147,7 +161,7 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 - 服务端不会返回心跳响应。
 - 正常心跳间隔使用握手响应里的 `tcp_heartbeat_interval_ms`。
 - 如果 `15000ms` 内没有收到有效控制消息，服务端会关闭会话。
-- 一个 TCP 连接只绑定一个角色和一个 key。
+- 一个 TCP 连接只绑定一个角色、一个 key 和一个 stream。
 
 ## UDP 二进制 API
 
@@ -268,7 +282,7 @@ Publisher 到服务端规则：
 
 服务端到 subscriber 的转发规则：
 
-- 服务端只转发给同一个 `key` 下已注册且仍活跃的 subscriber UDP 端点。
+- 服务端只转发给同一个 `(key, stream)` 下已注册且仍活跃的 subscriber UDP 端点。
 - 转发包保持 `sequence` 不变。
 - 转发包保持 `timestamp_ms` 不变。
 - 转发包保持 `payload` 不变。
@@ -281,7 +295,7 @@ Publisher 到服务端规则：
 ### Publisher 流程
 
 1. 连接 TCP 控制端口。
-2. 发送握手 JSON 行：`{"role":"publisher","key":"..."}`。
+2. 发送握手 JSON 行：`{"role":"publisher","key":"...","stream":"..."}`。
 3. 读取一行 JSON 响应。
 4. 确认 `status == "ok"`。
 5. 保存 `session_id`、`udp_port`、`tcp_heartbeat_interval_ms`、`udp_session_timeout_ms` 和 `udp_audio_payload_max_bytes`。
@@ -295,7 +309,7 @@ Publisher 到服务端规则：
 ### Subscriber 流程
 
 1. 连接 TCP 控制端口。
-2. 发送握手 JSON 行：`{"role":"subscriber","key":"..."}`。
+2. 发送握手 JSON 行：`{"role":"subscriber","key":"...","stream":"..."}`。
 3. 读取一行 JSON 响应。
 4. 确认 `status == "ok"`。
 5. 保存 `session_id`、`udp_port`、`tcp_heartbeat_interval_ms` 和 `udp_session_timeout_ms`。
@@ -308,6 +322,8 @@ Publisher 到服务端规则：
 12. 验证收到的转发 `audio_data` 使用的是 subscriber 自己的 session id。
 
 ## 状态 API
+
+`stream_count` 以及 `streams` 中的条目都按独立的 `(key, stream)` 组合统计；因此同一个 key 最多可以贡献三条流记录。
 
 状态 API 使用独立 TCP 端口。
 
@@ -332,6 +348,7 @@ Publisher 到服务端规则：
   "streams": [
     {
       "key": "room-123",
+      "stream": "system_audio",
       "publisher_control_connected": true,
       "publisher_udp_registered": true,
       "subscriber_count": 2,

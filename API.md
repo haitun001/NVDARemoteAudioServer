@@ -51,7 +51,7 @@ NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioSe
 
 ## Key Rules
 
-The business `key` is the password/channel string used to bind one publisher and many subscribers together.
+The business `key` is the password/channel string used to bind publishers and subscribers together. The required `stream` selects one independent audio direction; routing and the one-publisher limit apply to the `(key, stream)` pair.
 
 Rules:
 
@@ -63,6 +63,18 @@ Rules:
 - Must not contain control characters such as newline, tab, escape, or other Unicode control code points.
 
 Client integration note: encode the key as a normal JSON string. Let a JSON encoder escape quotes, backslashes, Unicode, and other required characters.
+
+## Audio Streams
+
+The required `stream` field accepts exactly these values:
+
+| Value | Direction |
+| --- | --- |
+| `system_audio` | Controlled system audio to the controller. |
+| `voice_controlled_to_controller` | Controlled microphone to the controller. |
+| `voice_controller_to_controlled` | Controller microphone to the controlled side. |
+
+Each `(key, stream)` has one publisher and any number of subscribers. Streams sharing a key never receive each other's packets.
 
 ## TCP Control API
 
@@ -77,13 +89,13 @@ After connecting to the control port, send exactly one UTF-8 JSON object followe
 Publisher:
 
 ```json
-{"role":"publisher","key":"room-123"}
+{"role":"publisher","key":"room-123","stream":"system_audio"}
 ```
 
 Subscriber:
 
 ```json
-{"role":"subscriber","key":"room-123"}
+{"role":"subscriber","key":"room-123","stream":"system_audio"}
 ```
 
 Fields:
@@ -92,6 +104,7 @@ Fields:
 | --- | --- | --- | --- |
 | `role` | string | yes | `publisher` or `subscriber`. |
 | `key` | string | yes | Business key/password/channel string. |
+| `stream` | string | yes | One of the supported audio stream values. |
 
 Request framing:
 
@@ -106,7 +119,7 @@ Request framing:
 The server replies with one JSON line:
 
 ```json
-{"status":"ok","message":"control session established","role":"publisher","key":"room-123","session_id":"00112233445566778899aabbccddeeff","udp_port":6838,"tcp_heartbeat_interval_ms":5000,"udp_session_timeout_ms":15000,"udp_audio_payload_max_bytes":1200}
+{"status":"ok","message":"control session established","role":"publisher","key":"room-123","stream":"system_audio","session_id":"00112233445566778899aabbccddeeff","udp_port":6838,"tcp_heartbeat_interval_ms":5000,"udp_session_timeout_ms":15000,"udp_audio_payload_max_bytes":1200}
 ```
 
 Fields:
@@ -117,6 +130,7 @@ Fields:
 | `message` | string | Human-readable status message. |
 | `role` | string | The accepted role. |
 | `key` | string | The accepted key. |
+| `stream` | string | The accepted audio stream. |
 | `session_id` | string | 32 lowercase hexadecimal characters representing 16 raw bytes. |
 | `udp_port` | number | UDP port to use for register, UDP heartbeat, and audio. |
 | `tcp_heartbeat_interval_ms` | number | Recommended TCP heartbeat interval. |
@@ -127,10 +141,10 @@ Client integration note: convert the 32-character `session_id` hex string into 1
 
 ### Handshake Failure Behavior
 
-If the same `key` already has an active publisher, a second publisher is rejected with one JSON line:
+If the same `(key, stream)` already has an active publisher, a second publisher is rejected with one JSON line:
 
 ```json
-{"status":"error","message":"publisher already connected for this key","key":"room-123"}
+{"status":"error","message":"publisher already connected for this key and stream","key":"room-123","stream":"system_audio"}
 ```
 
 Other malformed handshakes, invalid keys, invalid JSON, oversized requests, or timeout cases are not a stable JSON error API. Treat them as connection failure and reconnect only after fixing the request.
@@ -148,7 +162,7 @@ Behavior:
 - The server does not send a heartbeat response.
 - Use `tcp_heartbeat_interval_ms` from the handshake response as the normal interval.
 - If no valid control message is received within `15000ms`, the server closes the session.
-- A TCP connection is bound to exactly one role and one key.
+- A TCP connection is bound to exactly one role, key, and stream.
 
 ## UDP Binary API
 
@@ -269,7 +283,7 @@ Publisher-to-server rules:
 
 Server-to-subscriber forwarding rules:
 
-- The server forwards only to active subscriber UDP endpoints registered for the same `key`.
+- The server forwards only to active subscriber UDP endpoints registered for the same `(key, stream)`.
 - The forwarded packet keeps `sequence` unchanged.
 - The forwarded packet keeps `timestamp_ms` unchanged.
 - The forwarded packet keeps `payload` unchanged.
@@ -282,7 +296,7 @@ The server does not acknowledge audio packets and does not retransmit dropped pa
 ### Publisher Flow
 
 1. Open TCP connection to the control port.
-2. Send handshake JSON line: `{"role":"publisher","key":"..."}`.
+2. Send handshake JSON line: `{"role":"publisher","key":"...","stream":"..."}`.
 3. Read one JSON line response.
 4. Verify `status == "ok"`.
 5. Save `session_id`, `udp_port`, `tcp_heartbeat_interval_ms`, `udp_session_timeout_ms`, and `udp_audio_payload_max_bytes`.
@@ -296,7 +310,7 @@ The server does not acknowledge audio packets and does not retransmit dropped pa
 ### Subscriber Flow
 
 1. Open TCP connection to the control port.
-2. Send handshake JSON line: `{"role":"subscriber","key":"..."}`.
+2. Send handshake JSON line: `{"role":"subscriber","key":"...","stream":"..."}`.
 3. Read one JSON line response.
 4. Verify `status == "ok"`.
 5. Save `session_id`, `udp_port`, `tcp_heartbeat_interval_ms`, and `udp_session_timeout_ms`.
@@ -309,6 +323,8 @@ The server does not acknowledge audio packets and does not retransmit dropped pa
 12. Verify incoming forwarded `audio_data` uses the subscriber's own session id.
 
 ## Status API
+
+`stream_count` and the entries in `streams` count each independent `(key, stream)` pair. A single key can therefore contribute up to three stream entries.
 
 The status API uses a separate TCP port.
 
@@ -333,6 +349,7 @@ Successful response is one JSON line containing a `RegistrySnapshot` object:
   "streams": [
     {
       "key": "room-123",
+      "stream": "system_audio",
       "publisher_control_connected": true,
       "publisher_udp_registered": true,
       "subscriber_count": 2,

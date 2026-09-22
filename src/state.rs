@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{ClientRole, SessionId};
+use crate::protocol::{AudioStream, ClientRole, SessionId};
 
 #[derive(Clone)]
 pub struct StreamRegistry {
@@ -15,7 +15,7 @@ pub struct StreamRegistry {
 }
 
 struct RegistryInner {
-    streams: HashMap<String, StreamEntry>,
+    streams: HashMap<(String, AudioStream), StreamEntry>,
     sessions: HashMap<SessionId, SessionEntry>,
     invalid_udp_packets_total: u64,
     unknown_udp_session_packets_total: u64,
@@ -24,6 +24,7 @@ struct RegistryInner {
 struct SessionEntry {
     role: ClientRole,
     key: String,
+    stream: AudioStream,
     tcp_peer_addr: String,
     udp_endpoint: Option<SocketAddr>,
     udp_last_seen_unix_ms: Option<u64>,
@@ -71,6 +72,7 @@ pub struct UdpDispatchTarget {
 pub struct AudioDispatchPlan {
     pub publisher_session_id: SessionId,
     pub key: String,
+    pub stream: AudioStream,
     pub targets: Vec<UdpDispatchTarget>,
 }
 
@@ -112,6 +114,7 @@ pub struct RegistrySnapshot {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct StreamSnapshot {
     pub key: String,
+    pub stream: AudioStream,
     pub publisher_control_connected: bool,
     pub publisher_udp_registered: bool,
     pub subscriber_count: usize,
@@ -153,13 +156,14 @@ impl StreamRegistry {
         &self,
         role: ClientRole,
         key: &str,
+        stream: AudioStream,
         tcp_peer_addr: String,
     ) -> Result<SessionRegistration, RegisterSessionError> {
         let mut guard = self.inner.lock().expect("stream registry mutex poisoned");
         if role == ClientRole::Publisher
             && guard
                 .streams
-                .get(key)
+                .get(&(key.to_owned(), stream))
                 .is_some_and(|stream| stream.publisher_session.is_some())
         {
             return Err(RegisterSessionError::PublisherAlreadyConnected);
@@ -179,6 +183,7 @@ impl StreamRegistry {
             SessionEntry {
                 role,
                 key: key.to_owned(),
+                stream,
                 tcp_peer_addr,
                 udp_endpoint: None,
                 udp_last_seen_unix_ms: None,
@@ -187,7 +192,7 @@ impl StreamRegistry {
 
         let stream = guard
             .streams
-            .entry(key.to_owned())
+            .entry((key.to_owned(), stream))
             .or_insert_with(StreamEntry::new);
         match role {
             ClientRole::Publisher => {
@@ -212,7 +217,10 @@ impl StreamRegistry {
         };
 
         let mut remove_stream = false;
-        if let Some(stream) = guard.streams.get_mut(&session.key) {
+        if let Some(stream) = guard
+            .streams
+            .get_mut(&(session.key.clone(), session.stream))
+        {
             match session.role {
                 ClientRole::Publisher => {
                     if stream.publisher_session == Some(session_id) {
@@ -231,27 +239,27 @@ impl StreamRegistry {
         }
 
         if remove_stream {
-            guard.streams.remove(&session.key);
+            guard.streams.remove(&(session.key, session.stream));
         }
     }
 
     pub fn record_control_heartbeat(&self, session_id: SessionId) -> bool {
         let mut guard = self.inner.lock().expect("stream registry mutex poisoned");
-        let (role, key, now) = {
+        let (role, key, stream, now) = {
             let Some(session) = guard.sessions.get_mut(&session_id) else {
                 return false;
             };
 
             let now = unix_now_ms();
-            (session.role, session.key.clone(), now)
+            (session.role, session.key.clone(), session.stream, now)
         };
 
-        if let Some(stream) = guard.streams.get_mut(&key) {
+        if let Some(stream_entry) = guard.streams.get_mut(&(key, stream)) {
             match role {
-                ClientRole::Publisher => stream.publisher_tcp_heartbeats_total += 1,
-                ClientRole::Subscriber => stream.subscriber_tcp_heartbeats_total += 1,
+                ClientRole::Publisher => stream_entry.publisher_tcp_heartbeats_total += 1,
+                ClientRole::Subscriber => stream_entry.subscriber_tcp_heartbeats_total += 1,
             }
-            stream.last_activity_unix_ms = now;
+            stream_entry.last_activity_unix_ms = now;
         }
 
         true
@@ -263,7 +271,7 @@ impl StreamRegistry {
         endpoint: SocketAddr,
     ) -> Result<(), UdpRegisterError> {
         let mut guard = self.inner.lock().expect("stream registry mutex poisoned");
-        let (role, key, now) = {
+        let (role, key, stream, now) = {
             let Some(session) = guard.sessions.get_mut(&session_id) else {
                 return Err(UdpRegisterError::UnknownSession);
             };
@@ -271,15 +279,15 @@ impl StreamRegistry {
             let now = unix_now_ms();
             session.udp_endpoint = Some(endpoint);
             session.udp_last_seen_unix_ms = Some(now);
-            (session.role, session.key.clone(), now)
+            (session.role, session.key.clone(), session.stream, now)
         };
 
-        if let Some(stream) = guard.streams.get_mut(&key) {
+        if let Some(stream_entry) = guard.streams.get_mut(&(key, stream)) {
             match role {
-                ClientRole::Publisher => stream.publisher_udp_registers_total += 1,
-                ClientRole::Subscriber => stream.subscriber_udp_registers_total += 1,
+                ClientRole::Publisher => stream_entry.publisher_udp_registers_total += 1,
+                ClientRole::Subscriber => stream_entry.subscriber_udp_registers_total += 1,
             }
-            stream.last_activity_unix_ms = now;
+            stream_entry.last_activity_unix_ms = now;
         }
 
         Ok(())
@@ -291,7 +299,7 @@ impl StreamRegistry {
         endpoint: SocketAddr,
     ) -> Result<(), UdpHeartbeatError> {
         let mut guard = self.inner.lock().expect("stream registry mutex poisoned");
-        let (role, key, now) = {
+        let (role, key, stream, now) = {
             let Some(session) = guard.sessions.get_mut(&session_id) else {
                 return Err(UdpHeartbeatError::UnknownSession);
             };
@@ -300,15 +308,15 @@ impl StreamRegistry {
             ensure_udp_endpoint_matches(session, endpoint, now, self.udp_session_timeout_ms)
                 .map_err(map_udp_validation_error_to_heartbeat_error)?;
             session.udp_last_seen_unix_ms = Some(now);
-            (session.role, session.key.clone(), now)
+            (session.role, session.key.clone(), session.stream, now)
         };
 
-        if let Some(stream) = guard.streams.get_mut(&key) {
+        if let Some(stream_entry) = guard.streams.get_mut(&(key, stream)) {
             match role {
-                ClientRole::Publisher => stream.publisher_udp_heartbeats_total += 1,
-                ClientRole::Subscriber => stream.subscriber_udp_heartbeats_total += 1,
+                ClientRole::Publisher => stream_entry.publisher_udp_heartbeats_total += 1,
+                ClientRole::Subscriber => stream_entry.subscriber_udp_heartbeats_total += 1,
             }
-            stream.last_activity_unix_ms = now;
+            stream_entry.last_activity_unix_ms = now;
         }
 
         Ok(())
@@ -331,7 +339,7 @@ impl StreamRegistry {
         payload_bytes: usize,
     ) -> Result<AudioDispatchPlan, AudioDispatchError> {
         let mut guard = self.inner.lock().expect("stream registry mutex poisoned");
-        let (key, now) = {
+        let (key, stream, now) = {
             let Some(session) = guard.sessions.get_mut(&session_id) else {
                 return Err(AudioDispatchError::UnknownSession);
             };
@@ -344,12 +352,13 @@ impl StreamRegistry {
             ensure_udp_endpoint_matches(session, source_endpoint, now, self.udp_session_timeout_ms)
                 .map_err(map_udp_validation_error_to_audio_dispatch_error)?;
             session.udp_last_seen_unix_ms = Some(now);
-            (session.key.clone(), now)
+            (session.key.clone(), session.stream, now)
         };
+        let route = (key, stream);
 
         let subscriber_ids = guard
             .streams
-            .get(&key)
+            .get(&route)
             .map(|stream| stream.subscribers.iter().copied().collect::<Vec<_>>())
             .unwrap_or_default();
 
@@ -372,38 +381,41 @@ impl StreamRegistry {
             }
         }
 
-        if let Some(stream) = guard.streams.get_mut(&key) {
-            stream.udp_audio_packets_in_total += 1;
-            stream.udp_audio_bytes_in_total += payload_bytes as u64;
-            stream.last_activity_unix_ms = now;
+        if let Some(stream_entry) = guard.streams.get_mut(&route) {
+            stream_entry.udp_audio_packets_in_total += 1;
+            stream_entry.udp_audio_bytes_in_total += payload_bytes as u64;
+            stream_entry.last_activity_unix_ms = now;
         }
 
+        let (key, stream) = route;
         Ok(AudioDispatchPlan {
             publisher_session_id: session_id,
             key,
+            stream,
             targets,
         })
     }
 
     pub fn record_udp_send_error(&self, session_id: SessionId) {
         let mut guard = self.inner.lock().expect("stream registry mutex poisoned");
-        let Some(key) = guard
+        let Some((key, stream)) = guard
             .sessions
             .get(&session_id)
-            .map(|session| session.key.clone())
+            .map(|session| (session.key.clone(), session.stream))
         else {
             return;
         };
 
-        if let Some(stream) = guard.streams.get_mut(&key) {
-            stream.udp_send_errors_total += 1;
-            stream.last_activity_unix_ms = unix_now_ms();
+        if let Some(stream_entry) = guard.streams.get_mut(&(key, stream)) {
+            stream_entry.udp_send_errors_total += 1;
+            stream_entry.last_activity_unix_ms = unix_now_ms();
         }
     }
 
     pub fn record_audio_dispatch_outcome(
         &self,
-        key: &str,
+        key: String,
+        stream: AudioStream,
         payload_bytes: usize,
         successful_targets: usize,
         send_errors: usize,
@@ -413,14 +425,15 @@ impl StreamRegistry {
         }
 
         let mut guard = self.inner.lock().expect("stream registry mutex poisoned");
-        let Some(stream) = guard.streams.get_mut(key) else {
+        let Some(stream_entry) = guard.streams.get_mut(&(key, stream)) else {
             return;
         };
 
-        stream.udp_audio_packets_out_total += successful_targets as u64;
-        stream.udp_audio_bytes_out_total += (payload_bytes as u64) * (successful_targets as u64);
-        stream.udp_send_errors_total += send_errors as u64;
-        stream.last_activity_unix_ms = unix_now_ms();
+        stream_entry.udp_audio_packets_out_total += successful_targets as u64;
+        stream_entry.udp_audio_bytes_out_total +=
+            (payload_bytes as u64) * (successful_targets as u64);
+        stream_entry.udp_send_errors_total += send_errors as u64;
+        stream_entry.last_activity_unix_ms = unix_now_ms();
     }
 
     pub fn tcp_peer_addr(&self, session_id: SessionId) -> Option<String> {
@@ -431,11 +444,17 @@ impl StreamRegistry {
             .map(|session| session.tcp_peer_addr.clone())
     }
 
-    pub fn session_matches(&self, session_id: SessionId, role: ClientRole, key: &str) -> bool {
+    pub fn session_matches(
+        &self,
+        session_id: SessionId,
+        role: ClientRole,
+        key: &str,
+        stream: AudioStream,
+    ) -> bool {
         let guard = self.inner.lock().expect("stream registry mutex poisoned");
         matches!(
             guard.sessions.get(&session_id),
-            Some(session) if session.role == role && session.key == key
+            Some(session) if session.role == role && session.key == key && session.stream == stream
         )
     }
 
@@ -455,12 +474,15 @@ impl StreamRegistry {
         )
     }
 
-    pub fn session_role_and_key(&self, session_id: SessionId) -> Option<(ClientRole, String)> {
+    pub fn session_role_key_stream(
+        &self,
+        session_id: SessionId,
+    ) -> Option<(ClientRole, String, AudioStream)> {
         let guard = self.inner.lock().expect("stream registry mutex poisoned");
         guard
             .sessions
             .get(&session_id)
-            .map(|session| (session.role, session.key.clone()))
+            .map(|session| (session.role, session.key.clone(), session.stream))
     }
 
     pub fn snapshot(&self) -> RegistrySnapshot {
@@ -472,7 +494,7 @@ impl StreamRegistry {
         let mut active_udp_publisher_count = 0;
         let mut active_udp_subscriber_count = 0;
 
-        for (key, stream) in &guard.streams {
+        for ((key, stream_kind), stream) in &guard.streams {
             let publisher_control_connected = stream.publisher_session.is_some();
             let publisher_udp_registered = stream
                 .publisher_session
@@ -513,6 +535,7 @@ impl StreamRegistry {
 
             streams.push(StreamSnapshot {
                 key: key.clone(),
+                stream: *stream_kind,
                 publisher_control_connected,
                 publisher_udp_registered,
                 subscriber_count: stream.subscribers.len(),
@@ -536,7 +559,11 @@ impl StreamRegistry {
             });
         }
 
-        streams.sort_by(|left, right| left.key.cmp(&right.key));
+        streams.sort_by(|left, right| {
+            left.key
+                .cmp(&right.key)
+                .then(left.stream.cmp(&right.stream))
+        });
 
         RegistrySnapshot {
             generated_at_unix_ms: now,
@@ -656,7 +683,7 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use crate::protocol::{ClientRole, SessionId};
+    use crate::protocol::{AudioStream, ClientRole, SessionId};
 
     use super::{
         AudioDispatchError, RegisterSessionError, StreamRegistry, UdpHeartbeatError,
@@ -672,25 +699,74 @@ mod tests {
         let registry = StreamRegistry::new(15_000);
         assert!(
             registry
-                .register_control_session(ClientRole::Publisher, "abc", "peer-a".to_owned())
+                .register_control_session(
+                    ClientRole::Publisher,
+                    "abc",
+                    AudioStream::SystemAudio,
+                    "peer-a".to_owned()
+                )
                 .is_ok()
         );
         assert!(matches!(
-            registry.register_control_session(ClientRole::Publisher, "abc", "peer-b".to_owned()),
+            registry.register_control_session(
+                ClientRole::Publisher,
+                "abc",
+                AudioStream::SystemAudio,
+                "peer-b".to_owned()
+            ),
             Err(RegisterSessionError::PublisherAlreadyConnected)
         ));
+    }
+
+    #[test]
+    fn allows_publishers_on_different_streams_for_same_key() {
+        let registry = StreamRegistry::new(15_000);
+        assert!(
+            registry
+                .register_control_session(
+                    ClientRole::Publisher,
+                    "abc",
+                    AudioStream::SystemAudio,
+                    "peer-a".to_owned(),
+                )
+                .is_ok()
+        );
+        assert!(
+            registry
+                .register_control_session(
+                    ClientRole::Publisher,
+                    "abc",
+                    AudioStream::VoiceControlledToController,
+                    "peer-b".to_owned(),
+                )
+                .is_ok()
+        );
+
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.stream_count, 2);
+        assert_eq!(snapshot.active_publisher_count, 2);
     }
 
     #[test]
     fn allows_new_publisher_after_disconnect() {
         let registry = StreamRegistry::new(15_000);
         let session = registry
-            .register_control_session(ClientRole::Publisher, "abc", "peer-a".to_owned())
+            .register_control_session(
+                ClientRole::Publisher,
+                "abc",
+                AudioStream::SystemAudio,
+                "peer-a".to_owned(),
+            )
             .unwrap();
         registry.unregister_session(session.session_id, "peer_disconnected");
         assert!(
             registry
-                .register_control_session(ClientRole::Publisher, "abc", "peer-b".to_owned())
+                .register_control_session(
+                    ClientRole::Publisher,
+                    "abc",
+                    AudioStream::SystemAudio,
+                    "peer-b".to_owned()
+                )
                 .is_ok()
         );
     }
@@ -699,13 +775,28 @@ mod tests {
     fn dispatches_audio_only_to_udp_registered_subscribers() {
         let registry = StreamRegistry::new(15_000);
         let publisher = registry
-            .register_control_session(ClientRole::Publisher, "room", "publisher".to_owned())
+            .register_control_session(
+                ClientRole::Publisher,
+                "room",
+                AudioStream::SystemAudio,
+                "publisher".to_owned(),
+            )
             .unwrap();
         let subscriber_a = registry
-            .register_control_session(ClientRole::Subscriber, "room", "subscriber-a".to_owned())
+            .register_control_session(
+                ClientRole::Subscriber,
+                "room",
+                AudioStream::SystemAudio,
+                "subscriber-a".to_owned(),
+            )
             .unwrap();
         let _subscriber_b = registry
-            .register_control_session(ClientRole::Subscriber, "room", "subscriber-b".to_owned())
+            .register_control_session(
+                ClientRole::Subscriber,
+                "room",
+                AudioStream::SystemAudio,
+                "subscriber-b".to_owned(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -731,7 +822,12 @@ mod tests {
     fn rejects_audio_from_unregistered_publisher_endpoint() {
         let registry = StreamRegistry::new(15_000);
         let publisher = registry
-            .register_control_session(ClientRole::Publisher, "room", "publisher".to_owned())
+            .register_control_session(
+                ClientRole::Publisher,
+                "room",
+                AudioStream::SystemAudio,
+                "publisher".to_owned(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -744,7 +840,12 @@ mod tests {
     fn rejects_audio_from_subscriber_session() {
         let registry = StreamRegistry::new(15_000);
         let subscriber = registry
-            .register_control_session(ClientRole::Subscriber, "room", "subscriber".to_owned())
+            .register_control_session(
+                ClientRole::Subscriber,
+                "room",
+                AudioStream::SystemAudio,
+                "subscriber".to_owned(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -757,7 +858,12 @@ mod tests {
     fn udp_heartbeat_does_not_rebind_endpoint() {
         let registry = StreamRegistry::new(15_000);
         let subscriber = registry
-            .register_control_session(ClientRole::Subscriber, "room", "subscriber".to_owned())
+            .register_control_session(
+                ClientRole::Subscriber,
+                "room",
+                AudioStream::SystemAudio,
+                "subscriber".to_owned(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -776,7 +882,12 @@ mod tests {
     fn udp_heartbeat_requires_register_after_timeout() {
         let registry = StreamRegistry::new(1);
         let publisher = registry
-            .register_control_session(ClientRole::Publisher, "room", "publisher".to_owned())
+            .register_control_session(
+                ClientRole::Publisher,
+                "room",
+                AudioStream::SystemAudio,
+                "publisher".to_owned(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -811,10 +922,20 @@ mod tests {
     fn snapshot_contains_udp_counters() {
         let registry = StreamRegistry::new(15_000);
         let publisher = registry
-            .register_control_session(ClientRole::Publisher, "room", "publisher".to_owned())
+            .register_control_session(
+                ClientRole::Publisher,
+                "room",
+                AudioStream::SystemAudio,
+                "publisher".to_owned(),
+            )
             .unwrap();
         let subscriber = registry
-            .register_control_session(ClientRole::Subscriber, "room", "subscriber".to_owned())
+            .register_control_session(
+                ClientRole::Subscriber,
+                "room",
+                AudioStream::SystemAudio,
+                "subscriber".to_owned(),
+            )
             .unwrap();
 
         assert!(registry.record_control_heartbeat(publisher.session_id));
@@ -838,7 +959,7 @@ mod tests {
         let plan = registry
             .prepare_audio_dispatch(publisher.session_id, addr(4100), 12)
             .unwrap();
-        registry.record_audio_dispatch_outcome(&plan.key, 12, plan.targets.len(), 0);
+        registry.record_audio_dispatch_outcome(plan.key, plan.stream, 12, plan.targets.len(), 0);
 
         let snapshot = registry.snapshot();
         assert_eq!(snapshot.stream_count, 1);
@@ -863,7 +984,12 @@ mod tests {
     fn preserves_session_peer_lookup() {
         let registry = StreamRegistry::new(15_000);
         let session = registry
-            .register_control_session(ClientRole::Subscriber, "room", "peer-1".to_owned())
+            .register_control_session(
+                ClientRole::Subscriber,
+                "room",
+                AudioStream::SystemAudio,
+                "peer-1".to_owned(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -871,8 +997,12 @@ mod tests {
             Some("peer-1".to_owned())
         );
         assert_eq!(
-            registry.session_role_and_key(session.session_id),
-            Some((ClientRole::Subscriber, "room".to_owned()))
+            registry.session_role_key_stream(session.session_id),
+            Some((
+                ClientRole::Subscriber,
+                "room".to_owned(),
+                AudioStream::SystemAudio
+            ))
         );
         assert_eq!(
             SessionId::from_hex(&session.session_id.to_hex()).unwrap(),
