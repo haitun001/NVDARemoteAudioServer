@@ -327,9 +327,9 @@ NVDARemoteAudioServer is licensed under the GNU General Public License version 2
 
 ## Release CI
 
-GitHub Actions creates a release when a version tag is pushed. Both numeric tags such as `0.1` and conventional tags such as `v0.1.0` are supported.
+GitHub Actions creates a release when a version tag is pushed. Both numeric tags such as `0.1` and conventional tags such as `v0.1.0` are supported. Release notes are generated in Chinese and English with the version summary, protocol compatibility notes, CI validation, build artifacts, and commit summary.
 
 ```bash
-git tag -a 0.1 -m "Release 0.1"
-git push origin 0.1
+git tag -a 0.6 -m "Release 0.6"
+git push origin 0.6
 ```

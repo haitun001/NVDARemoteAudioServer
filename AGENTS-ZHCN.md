@@ -116,8 +116,8 @@ git status
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-git tag -a 0.1 -m "Release 0.1"
-git push origin 0.1
+git tag -a 0.6 -m "Release 0.6"
+git push origin 0.6
 ```
 
 CI workflow 必须：
@@ -126,6 +126,7 @@ CI workflow 必须：
 - 构建 Linux amd64。
 - 构建 Windows amd64。
 - 将二进制与 `README.md`、`README-ZHCN.md`、`API.md`、`API-ZHCN.md` 和 `LICENSE` 一起打包。
+- 生成包含版本摘要、协议兼容提示、CI 验证、构建附件和提交摘要的中英双语 release 说明。
 - 根据推送的标签创建 GitHub Release。
 
 不要把 release 二进制手动加入仓库。

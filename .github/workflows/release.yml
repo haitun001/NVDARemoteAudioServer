@@ -121,7 +121,40 @@ jobs:
           {
             echo "NVDARemoteAudioServer $TAG_NAME"
             echo
-            echo "Changes:"
+            echo "## 中文"
+            echo
+            echo "### 版本摘要"
+            echo "- 新增按 (key, stream) 组合进行音频路由。"
+            echo "- 支持 system_audio、voice_controlled_to_controller、voice_controller_to_controlled 三条独立音频流。"
+            echo "- 每个 (key, stream) 允许一个 publisher 和多个 subscriber，并按流提供状态统计。"
+            echo "- 压测工具新增 --stream 参数，发布包包含双语 README、API 文档、许可证和 systemd 单元。"
+            echo
+            echo "### 协议兼容"
+            echo "- TCP 握手现在必须包含 stream；现有客户端需要发送支持的流名称。"
+            echo
+            echo "### 验证与附件"
+            echo "- GitHub Actions 运行 cargo fmt、cargo clippy 和 cargo test。"
+            echo "- 发布包包含 Linux amd64 与 Windows amd64 构建产物。"
+            echo
+            echo "### 提交摘要"
+            echo "- $COMMIT_SUBJECT"
+            echo
+            echo "## English"
+            echo
+            echo "### Release Summary"
+            echo "- Adds audio routing by the (key, stream) pair."
+            echo "- Supports three independent streams: system_audio, voice_controlled_to_controller, and voice_controller_to_controlled."
+            echo "- Each (key, stream) allows one publisher and multiple subscribers, with per-stream status statistics."
+            echo "- Adds the --stream load-test option; packages include bilingual README files, API documentation, the license, and the systemd unit."
+            echo
+            echo "### Protocol Compatibility"
+            echo "- TCP handshakes now require stream; existing clients must send one of the supported stream names."
+            echo
+            echo "### Validation and Artifacts"
+            echo "- GitHub Actions runs cargo fmt, cargo clippy, and cargo test."
+            echo "- The release includes Linux amd64 and Windows amd64 build artifacts."
+            echo
+            echo "### Commit Summary"
             echo "- $COMMIT_SUBJECT"
           } > release-notes.md
 

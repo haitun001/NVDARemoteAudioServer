@@ -327,9 +327,9 @@ NVDARemoteAudioServer 使用 GNU General Public License version 2 only 许可证
 
 ## Release CI
 
-推送版本标签时，GitHub Actions 会自动创建 Release。支持 `0.1` 这种数字标签，也支持 `v0.1.0` 这种常见标签。
+推送版本标签时，GitHub Actions 会自动创建 Release。支持 `0.1` 这种数字标签，也支持 `v0.1.0` 这种常见标签。Release 说明会以中英双语生成，并包含版本摘要、协议兼容提示、CI 验证、构建附件和提交摘要。
 
 ```bash
-git tag -a 0.1 -m "Release 0.1"
-git push origin 0.1
+git tag -a 0.6 -m "Release 0.6"
+git push origin 0.6
 ```

@@ -116,8 +116,8 @@ git status
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-git tag -a 0.1 -m "Release 0.1"
-git push origin 0.1
+git tag -a 0.6 -m "Release 0.6"
+git push origin 0.6
 ```
 
 The CI workflow must:
@@ -126,6 +126,7 @@ The CI workflow must:
 - Build Linux amd64.
 - Build Windows amd64.
 - Package binaries with `README.md`, `README-ZHCN.md`, `API.md`, `API-ZHCN.md`, and `LICENSE`.
+- Generate Chinese and English release notes with the version summary, protocol compatibility notes, CI validation, build artifacts, and commit summary.
 - Create a GitHub Release from the pushed tag.
 
 Do not manually add release binaries to the repository.
