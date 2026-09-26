@@ -1,88 +1,71 @@
-# Agent Maintenance Guide
+# Agent maintenance guide
 
-This file defines the maintenance contract for agents working on `NVDARemoteAudioServer`. Follow it before changing code, docs, CI, or deployment files.
+These rules apply to changes to code, documentation, CI, and deployment files in `NVDARemoteAudioServer`.
 
-## Project Purpose
+## Scope
 
-`NVDARemoteAudioServer` is a Rust relay server for low-latency remote audio transport.
+This Rust audio relay handles TCP authentication and heartbeats, UDP endpoint registration by `session_id`, audio forwarding, a separate TCP status interface, and operational logs.
 
-The server is intentionally narrow:
+Each `(key, stream)` allows at most one publisher and multiple subscribers. The independent streams are `system_audio`, `voice_controlled_to_controller`, and `voice_controller_to_controlled`.
 
-- Authenticate clients through TCP control sessions.
-- Keep TCP control heartbeats.
-- Route streams by `(key, stream)`.
-- Enforce one publisher per `(key, stream)`.
-- Allow many subscribers per `(key, stream)`.
-- Supported streams are `system_audio`, `voice_controlled_to_controller`, and `voice_controller_to_controlled`.
-- Register UDP endpoints by `session_id`.
-- Forward UDP audio packets from one publisher to active subscribers.
-- Expose status statistics on a separate TCP status port.
-- Write operational logs.
+Keep audio capture, playback, encoding, decoding, resampling, mixing, retransmission, RTP/RTCP, packet order repair, and codec-specific work in clients.
 
-The server must not perform audio capture, playback, encoding, decoding, resampling, mixing, retransmission, RTP/RTCP, packet ordering repair, or codec-specific work. Those jobs belong to clients.
+## Protocol contract
 
-## Stable Protocol Contract
+Changes to this contract require corresponding updates to the README and API documents, tests, load test tool, and downstream clients.
 
-Do not change this contract unless the README, tests, load test, and downstream clients are updated together.
+| Setting | Value |
+| --- | --- |
+| Default TCP control / UDP data port | `6838` |
+| Default TCP status port | `6839` |
+| TCP handshake request limit | 4096 bytes |
+| TCP control message / status request limit | 1024 bytes |
+| Handshake timeout | 5000 ms |
+| TCP control idle timeout | 15000 ms |
+| UDP endpoint inactivity timeout | 15000 ms |
+| UDP packet size limit | 1400 bytes |
+| UDP audio payload limit | 1200 bytes |
+| Status access key | `audiostatus` |
 
-- Default TCP control port: `6838`.
-- Default UDP data port: `6838`.
-- Default TCP status port: `6839`.
-- TCP handshake max request size: `4096` bytes.
-- TCP control message max request size: `1024` bytes.
-- TCP status request max size: `1024` bytes.
-- Handshake timeout: `5000ms`.
-- TCP control idle timeout: `15000ms`.
-- UDP session timeout: `15000ms`.
-- UDP max packet size: `1400` bytes.
-- UDP max audio payload size: `1200` bytes.
-- Status access key: `audiostatus`.
+### Connection keys
 
-Business `key` rules:
+`key` is an exact-match password/channel string, following NVDA Remote's key rules. It must be non-empty and at most 128 UTF-8 bytes. Do not trim, change case, normalize, or restrict printable spaces, symbols, or Unicode. Reject control characters because keys appear in logs and line-oriented operational tools.
 
-- Non-empty.
-- Max length `128` UTF-8 bytes.
-- Treat the key as an opaque exact-match password/channel string, matching NVDA Remote behavior.
-- Do not trim, lowercase, normalize, or restrict printable symbols, spaces, or Unicode characters.
-- Reject control characters because keys are logged and exposed through line-oriented operational tools.
+### TCP control
 
-TCP control behavior:
+- Clients send a JSON line ending in `\n` immediately after connecting.
+- `role` is `publisher` or `subscriber`; `stream` is required and names one of the three supported streams.
+- Success responses contain `status`, `message`, `role`, `key`, `stream`, `session_id`, `udp_port`, `tcp_heartbeat_interval_ms`, `udp_session_timeout_ms`, and `udp_audio_payload_max_bytes`.
+- `session_id` is 16 bytes, serialized as 32 hexadecimal characters.
+- Each session keeps its TCP control connection alive with `{"type":"heartbeat"}`.
+- A control disconnect immediately invalidates the session and its UDP endpoint.
 
-- Client sends one JSON line ending in `\n` immediately after connect.
-- Role is `publisher` or `subscriber`.
-- `stream` is required and identifies one of the three supported audio directions.
-- Successful response includes `status`, `role`, `key`, `stream`, `session_id`, `udp_port`, `tcp_heartbeat_interval_ms`, `udp_session_timeout_ms`, and `udp_audio_payload_max_bytes`.
-- `session_id` is exactly 16 bytes serialized as 32 hexadecimal characters.
-- Each successful session must keep its TCP control connection alive.
-- TCP heartbeat JSON is `{"type":"heartbeat"}`.
-- TCP control disconnect immediately invalidates the session and its UDP endpoint.
+### UDP
 
-UDP packet layout:
+- Magic: `RAS1`; version: `1`.
+- Types: `0x01 register`, `0x02 register_ack`, `0x03 heartbeat`, `0x04 audio_data`.
+- `session_id` uses 16 raw bytes.
+- `audio_data` uses big-endian `u64` fields for `sequence` and `timestamp_ms` (milliseconds).
+- UDP heartbeats and audio must match the registered source IP address and port. Only publishers may send audio.
+- Forward only to active subscribers on the same `(key, stream)`. Preserve `sequence`, `timestamp_ms`, and `payload`; replace `session_id` with the recipient's session ID.
 
-- Magic: `RAS1`.
-- Version: `1`.
-- Packet types: `0x01 register`, `0x02 register_ack`, `0x03 heartbeat`, `0x04 audio_data`.
-- `session_id` is 16 raw bytes in UDP packets.
-- `audio_data` metadata uses big-endian `u64` sequence and big-endian `u64` timestamp in milliseconds.
-- Publisher audio must come from the registered UDP endpoint for the publisher session.
-- Subscriber sessions must never be accepted as audio publishers.
-- Forwarded audio stays within the same `(key, stream)`, keeps `sequence`, `timestamp_ms`, and payload unchanged, but replaces `session_id` with the target subscriber session id.
+## Repository layout
 
-## Repository Layout
+| Path | Responsibility |
+| --- | --- |
+| `src/config.rs` | CLI arguments, defaults, and protocol limits |
+| `src/protocol.rs` | JSON and UDP encoding, decoding, and validation |
+| `src/state.rs` | Sessions, streams, counters, and UDP endpoint validation |
+| `src/server.rs` | TCP control, UDP forwarding, status queries, dispatch workers, and integration tests |
+| `src/net.rs` | UDP socket binding and buffer sizes |
+| `src/main.rs` | Runtime entry point and logging |
+| `src/bin/NVDARemoteAudioServer_load_test.rs` | TCP/UDP load test tool |
+| `deploy/systemd/NVDARemoteAudioServer.service` | Linux systemd service template |
+| `.github/workflows/release.yml` | Tag-triggered releases |
 
-- `src/config.rs`: CLI arguments, defaults, protocol limits.
-- `src/protocol.rs`: JSON and UDP encode/decode helpers.
-- `src/state.rs`: session registry, stream state, counters, UDP endpoint validation.
-- `src/server.rs`: TCP control server, UDP server, status server, dispatch workers, integration tests.
-- `src/net.rs`: UDP socket binding and buffer sizing.
-- `src/main.rs`: runtime entry point and logging setup.
-- `src/bin/NVDARemoteAudioServer_load_test.rs`: real TCP/UDP load test tool.
-- `deploy/systemd/NVDARemoteAudioServer.service`: Linux systemd service template.
-- `.github/workflows/release.yml`: tag-triggered release pipeline.
+Do not commit `target/`, `dist/`, local logs, packet captures, temporary load test output, or manually built binaries. Publish binaries through GitHub Releases.
 
-Do not commit `target/`, `dist/`, local logs, captures, temporary stress-test outputs, or manually built binaries. Release binaries belong in GitHub Releases.
-
-## Required Validation
+## Validation
 
 Before committing code changes, run:
 
@@ -92,101 +75,60 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-For protocol or networking changes, also run a real local TCP/UDP load test:
+For protocol or networking changes, also run the local TCP/UDP load test:
 
 ```bash
 cargo run --release --bin NVDARemoteAudioServer_load_test -- --stream=system_audio --publishers=20 --subscribers-per-publisher=20 --packets-per-publisher=200 --payload-bytes=1200
 ```
 
-If a validation command cannot be run, state exactly which command was skipped and why.
+If a command cannot be run, report the exact command and reason.
 
-## Release Contract
+## Releases
 
-Releases are created by GitHub Actions when a tag is pushed.
+GitHub Actions releases on tag push; supported formats include `0.1` and `v0.1.0`.
 
-Supported tag styles:
-
-- `0.1`
-- `v0.1.0`
-
-Recommended release steps:
+Check `git status`, run the validation commands above, and use an unused version tag. Example:
 
 ```bash
-git status
-cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
-cargo test
 git tag -a 0.6 -m "Release 0.6"
 git push origin 0.6
 ```
 
-The CI workflow must:
+The workflow must:
 
-- Run format, clippy, and tests.
-- Build Linux amd64.
-- Build Windows amd64.
-- Package binaries with `README.md`, `README-ZHCN.md`, `API.md`, `API-ZHCN.md`, and `LICENSE`.
-- Generate Chinese and English release notes with the version summary, protocol compatibility notes, CI validation, build artifacts, and commit summary.
+- Run format checks, Clippy, and tests.
+- Build Linux amd64 and Windows amd64 packages.
+- Include `README.md`, `README-ZHCN.md`, `API.md`, `API-ZHCN.md`, and `LICENSE` with the binaries.
+- Generate Chinese and English release notes covering the version summary, protocol compatibility, CI validation, artifacts, and commit summary.
 - Create a GitHub Release from the pushed tag.
 
-Do not manually add release binaries to the repository.
+## Coding rules
 
-## Coding Rules
+- Keep the server small and its behavior predictable.
+- Prefer explicit error handling over `unwrap` or `expect` in production. Both are acceptable in tests when they clarify intent.
+- Check UDP lengths before slicing.
+- Do not hold locks across `.await` or add blocking I/O to async hot paths.
+- Retry or buffering features require a protocol decision before implementation.
+- Keep status output as one JSON object per line.
+- Keep logs useful for operations; avoid high-volume per-packet logs except on error paths.
 
-- Keep the server small and predictable.
-- Prefer explicit error handling over `unwrap` or `expect` in production paths.
-- `unwrap` and `expect` are acceptable in tests when they make test intent clearer.
-- Keep UDP parsing length checks before slicing.
-- Do not hold locks across `.await`.
-- Do not add blocking I/O inside async hot paths.
-- Do not add codec, audio, RTP, retry, retransmission, or buffering features to the server without a protocol decision.
-- Do not change defaults or packet layouts without updating tests and public documentation.
-- Do not weaken endpoint binding: UDP packets must match the registered source address and port.
-- Keep status output line-oriented JSON.
-- Keep log output useful for operations, but avoid high-volume per-packet logs unless they are error paths.
+## Documentation
 
-## Documentation Rules
+Update the public documents together: `README.md`, `README-ZHCN.md`, `API.md`, and `API-ZHCN.md`. Keep `AGENTS.md` and `AGENTS-ZHCN.md` in sync as well.
 
-Update all public documentation files together:
+Document changes to CLI arguments (including the load test stream selector), default ports, TCP/UDP/status behavior, deployment, load testing, and release CI.
 
-- `README.md`
-- `README-ZHCN.md`
-- `API.md`
-- `API-ZHCN.md`
+README covers operation; API documents cover client integration. Verify claims against code. Keep languages equivalent, terms consistent, and wording natural. Avoid repetition and promotional language.
 
-Update both agent maintenance guides together:
+## Operations
 
-- `AGENTS.md`
-- `AGENTS-ZHCN.md`
+- Allow TCP and UDP `6838`. Open status port TCP `6839` only as needed with intentional firewall rules; its key is fixed as `audiostatus`.
+- The supplied Linux systemd service runs as `root`, as required by the project. Any change must update the service and documentation together.
+- Windows builds are console programs. Do not document direct installation with `sc.exe create` unless Windows Service support is implemented.
 
-Whenever behavior changes, document:
+## Handoff
 
-- CLI arguments, including the load-test stream selector.
-- Default ports.
-- Public TCP/UDP/status API behavior.
-- Deployment steps.
-- Status behavior.
-- Load test usage.
-- Release behavior if CI changes.
-
-Keep wording practical and readable. The README should help an operator get the server running without needing to understand the whole codebase first.
-
-## Security And Operations Notes
-
-- The status key is fixed as `audiostatus`; do not expose the status port publicly unless firewall rules are intentional.
-- Production Linux deployment currently runs as `root` in the provided systemd unit because that was a project requirement. If this changes, update systemd and docs together.
-- Open both TCP and UDP for port `6838`.
-- Open TCP `6839` only if status access is needed.
-- The server is a normal console process on Windows, not a native Windows Service binary. Do not document direct `sc.exe create` service installation unless Windows Service support is implemented in code.
-
-## Handoff Checklist
-
-Before handing work back:
-
-- `git status --short` is understood and reported.
-- No `target/` or `dist/` directory is prepared for commit.
-- README and README-ZHCN are in sync.
-- API and API-ZHCN are in sync.
-- CI workflow still triggers on tag push.
-- The release tag flow is not broken.
-- All validation results are reported honestly.
+- Review and report `git status --short`; do not stage `target/` or `dist/`.
+- Confirm that all three English/Chinese document pairs agree.
+- Confirm that CI still triggers on tag pushes and the release flow remains intact.
+- Report validation results and any skipped checks accurately.

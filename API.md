@@ -1,340 +1,159 @@
 # NVDARemoteAudioServer API
 
-This document describes the wire protocol used by `NVDARemoteAudioServer`.
-It is intended for client developers who need to integrate with the server.
+[简体中文](API-ZHCN.md) · [Deployment and usage](README.md)
 
-The server is not an HTTP service. It exposes:
+These interfaces use TCP/UDP directly, not HTTP.
 
-- A TCP control API for authentication and heartbeats.
-- A UDP binary API for endpoint registration, UDP heartbeats, and audio packet forwarding.
-- A TCP status API for operational snapshots.
+## Endpoints and limits
 
-The server does not capture, encode, decode, play, mix, resample, retransmit, reorder, or repair audio. Clients own all audio work.
-
-## Default Endpoints
-
-| Purpose | Transport | Default address |
+| Interface | Default listener | Purpose |
 | --- | --- | --- |
-| Control handshake and control heartbeat | TCP | `0.0.0.0:6838` |
-| UDP registration, UDP heartbeat, audio data | UDP | `0.0.0.0:6838` |
-| Status snapshot | TCP | `0.0.0.0:6839` |
+| TCP control | `0.0.0.0:6838` | Handshake and session heartbeats |
+| UDP data | `0.0.0.0:6838` | Endpoint registration, heartbeats, and audio |
+| TCP status | `0.0.0.0:6839` | Status queries |
 
-Startup arguments:
-
-```bash
-NVDARemoteAudioServer --port=6838 --sport=6839 --log=/home/app/NVDARemoteAudioServer/logs/NVDARemoteAudioServer.log
-```
-
-| Argument | Meaning |
+| Limit | Value |
 | --- | --- |
-| `--port=6838` | Sets both the TCP control port and UDP data port. |
-| `--sport=6839` | Sets the TCP status port. |
-| `--log=/path/to/file.log` | Writes logs to a file. Without it, logs go to stdout. |
+| TCP handshake request | 4096 bytes |
+| TCP control message | 1024 bytes |
+| TCP status request | 1024 bytes |
+| Handshake and status request timeout | 5000 ms |
+| TCP control idle timeout | 15000 ms |
+| Recommended TCP heartbeat interval | 5000 ms |
+| UDP endpoint inactivity timeout | 15000 ms |
+| UDP receive buffer per packet | 1400 bytes |
+| Audio payload limit | 1200 bytes |
 
-## Protocol Constants
+TCP requests and responses are UTF-8 JSON objects, one per line, terminated by `\n`. Requests also accept `\r\n`. Size limits exclude the terminating newline and ignored carriage returns. Empty lines are invalid.
 
-| Name | Value |
-| --- | --- |
-| TCP handshake max request size | `4096` bytes |
-| TCP control message max request size | `1024` bytes |
-| TCP status request max size | `1024` bytes |
-| TCP status response max size used by bundled tooling | `16777216` bytes |
-| TCP handshake timeout | `5000ms` |
-| TCP control idle timeout | `15000ms` |
-| TCP heartbeat interval returned to clients | `5000ms` |
-| UDP session timeout | `15000ms` |
-| UDP max packet size | `1400` bytes |
-| UDP max audio payload size | `1200` bytes |
-| UDP magic | ASCII `RAS1` |
-| UDP version | `1` |
-| Status access key | `audiostatus` |
+## Keys and streams
 
-## Key Rules
+`key` is the channel's shared password, matched exactly as in NVDA Remote:
 
-The business `key` is the password/channel string used to bind publishers and subscribers together. The required `stream` selects one independent audio direction; routing and the one-publisher limit apply to the `(key, stream)` pair.
+- Non-empty, at most 128 UTF-8 bytes.
+- Spaces, symbols, and Unicode are allowed. No trimming, case conversion, or Unicode normalization is applied.
+- Control characters, including newline, tab, and escape, are rejected.
 
-Rules:
-
-- Must be non-empty.
-- Must be at most `128` UTF-8 bytes.
-- Is matched exactly.
-- Is not trimmed, lowercased, normalized, or restricted to ASCII.
-- May contain printable spaces, symbols, and Unicode characters.
-- Must not contain control characters such as newline, tab, escape, or other Unicode control code points.
-
-Client integration note: encode the key as a normal JSON string. Let a JSON encoder escape quotes, backslashes, Unicode, and other required characters.
-
-## Audio Streams
-
-The required `stream` field accepts exactly these values:
+The required `stream` field accepts these values:
 
 | Value | Direction |
 | --- | --- |
-| `system_audio` | Controlled system audio to the controller. |
-| `voice_controlled_to_controller` | Controlled microphone to the controller. |
-| `voice_controller_to_controlled` | Controller microphone to the controlled side. |
+| `system_audio` | Controlled device's system audio → controller |
+| `voice_controlled_to_controller` | Controlled device's microphone → controller |
+| `voice_controller_to_controlled` | Controller's microphone → controlled device |
 
-Each `(key, stream)` has one publisher and any number of subscribers. Streams sharing a key never receive each other's packets.
+Each `(key, stream)` allows at most one publisher and multiple subscribers. Subscribers may connect first. A publisher occupies its slot until its TCP session ends, regardless of UDP registration or expiry.
 
-## TCP Control API
+## TCP control API
 
-Every publisher and every subscriber must keep its own TCP control connection open for the full session lifetime.
+Each publisher and subscriber keeps a TCP connection bound to one role, key, and stream. A detected disconnect or control timeout immediately invalidates the session and its UDP endpoint. Reconnecting requires a new handshake.
 
-If the TCP control connection closes, the server immediately invalidates the session and its UDP endpoint.
+### Handshake
 
-### Handshake Request
-
-After connecting to the control port, send exactly one UTF-8 JSON object followed by `\n`.
-
-Publisher:
+Send the handshake immediately after connecting and complete it within 5000 ms. `role`, `key`, and `stream` are required strings; `role` is `publisher` or `subscriber`.
 
 ```json
 {"role":"publisher","key":"room-123","stream":"system_audio"}
 ```
 
-Subscriber:
-
-```json
-{"role":"subscriber","key":"room-123","stream":"system_audio"}
-```
-
-Fields:
-
-| Field | Type | Required | Meaning |
-| --- | --- | --- | --- |
-| `role` | string | yes | `publisher` or `subscriber`. |
-| `key` | string | yes | Business key/password/channel string. |
-| `stream` | string | yes | One of the supported audio stream values. |
-
-Request framing:
-
-- The JSON request is line-oriented and must end with `\n`.
-- `\r\n` is accepted because `\r` is ignored while reading a line.
-- Empty lines are rejected.
-- Requests larger than `4096` bytes are rejected.
-- If a client connects and does not finish the handshake within `5000ms`, the handshake fails.
-
-### Successful Handshake Response
-
-The server replies with one JSON line:
+Successful response:
 
 ```json
 {"status":"ok","message":"control session established","role":"publisher","key":"room-123","stream":"system_audio","session_id":"00112233445566778899aabbccddeeff","udp_port":6838,"tcp_heartbeat_interval_ms":5000,"udp_session_timeout_ms":15000,"udp_audio_payload_max_bytes":1200}
 ```
 
-Fields:
-
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `status` | string | `ok` on success. |
-| `message` | string | Human-readable status message. |
-| `role` | string | The accepted role. |
-| `key` | string | The accepted key. |
-| `stream` | string | The accepted audio stream. |
-| `session_id` | string | 32 lowercase hexadecimal characters representing 16 raw bytes. |
-| `udp_port` | number | UDP port to use for register, UDP heartbeat, and audio. |
-| `tcp_heartbeat_interval_ms` | number | Recommended TCP heartbeat interval. |
-| `udp_session_timeout_ms` | number | UDP endpoint inactivity timeout. |
-| `udp_audio_payload_max_bytes` | number | Max audio payload bytes in one UDP audio packet. |
+| `status` | string | `ok` on success |
+| `message` | string | Status description |
+| `role`, `key`, `stream` | string | Accepted handshake values |
+| `session_id` | string | 16 bytes encoded as 32 lowercase hexadecimal characters |
+| `udp_port` | integer | Server port for all UDP packets |
+| `tcp_heartbeat_interval_ms` | integer | Recommended TCP heartbeat interval |
+| `udp_session_timeout_ms` | integer | UDP endpoint inactivity timeout |
+| `udp_audio_payload_max_bytes` | integer | Maximum audio payload per packet |
 
-Client integration note: convert the 32-character `session_id` hex string into 16 raw bytes before using it in UDP packets.
-
-### Handshake Failure Behavior
-
-If the same `(key, stream)` already has an active publisher, a second publisher is rejected with one JSON line:
+If a publisher already exists for the same `(key, stream)`, the server returns this error and closes the connection:
 
 ```json
 {"status":"error","message":"publisher already connected for this key and stream","key":"room-123","stream":"system_audio"}
 ```
 
-Other malformed handshakes, invalid keys, invalid JSON, oversized requests, or timeout cases are not a stable JSON error API. Treat them as connection failure and reconnect only after fixing the request.
+For other invalid handshakes or timeouts, the server closes the connection without a JSON error response.
 
-### TCP Control Heartbeat
+### Heartbeats
 
-After a successful handshake, send this JSON line periodically on the same TCP connection:
+Send this JSON line on the same connection at the interval returned in the handshake:
 
 ```json
 {"type":"heartbeat"}
 ```
 
-Behavior:
+There is no response. The server closes the session if it does not receive a complete valid heartbeat within 15000 ms. Invalid or oversized control messages also close the session. UDP traffic does not keep the TCP session alive.
 
-- The server does not send a heartbeat response.
-- Use `tcp_heartbeat_interval_ms` from the handshake response as the normal interval.
-- If no valid control message is received within `15000ms`, the server closes the session.
-- A TCP connection is bound to exactly one role, key, and stream.
+## UDP binary API
 
-## UDP Binary API
+### Common header
 
-All UDP packets start with the same base header.
-
-### Base Header
+All offsets and sizes below are in bytes. Every packet begins with this 22-byte header:
 
 | Offset | Size | Field | Value |
 | --- | ---: | --- | --- |
-| `0` | `4` | magic | ASCII `RAS1` |
-| `4` | `1` | version | `0x01` |
-| `5` | `1` | packet_type | See packet type table. |
-| `6` | `16` | session_id | 16 raw bytes from the TCP handshake `session_id`. |
+| 0 | 4 | `magic` | ASCII `RAS1` |
+| 4 | 1 | `version` | `0x01` |
+| 5 | 1 | `packet_type` | See below |
+| 6 | 16 | `session_id` | Raw bytes from the TCP handshake |
 
-Base header length: `22` bytes.
+| Type | Name | Direction | Total size |
+| --- | --- | --- | --- |
+| `0x01` | `register` | Client → server | 22 bytes |
+| `0x02` | `register_ack` | Server → client | 22 bytes |
+| `0x03` | `heartbeat` | Client → server | 22 bytes |
+| `0x04` | `audio_data` | Publisher → server → subscribers | 38–1238 bytes |
 
-Packet types:
+The first three packet types contain only the common header. Invalid packets are dropped; error counters are described in the status API.
 
-| Type | Name | Direction |
-| --- | --- | --- |
-| `0x01` | `register` | Client to server |
-| `0x02` | `register_ack` | Server to client |
-| `0x03` | `heartbeat` | Client to server |
-| `0x04` | `audio_data` | Publisher to server, server to subscribers |
+### Endpoint registration
 
-Packets with invalid magic, unsupported version, unknown type, invalid length, or payload above the configured limit are rejected and counted as invalid UDP packets.
+After the TCP handshake, send `register` to `udp_port` from the socket that will carry the session's UDP traffic. The server binds the source IP address and port and replies with `register_ack` containing the same session ID. Unknown or ended sessions receive no acknowledgment.
 
-### UDP Register
+Wait for a matching `register_ack` before using the endpoint. If none arrives, retry with backoff while keeping TCP alive. A new registration replaces the endpoint; register again after expiry or a source address or port change. Heartbeats and audio cannot change the binding.
 
-Register packet layout:
+### UDP heartbeats and expiry
 
-| Offset | Size | Field |
-| --- | ---: | --- |
-| `0` | `4` | magic `RAS1` |
-| `4` | `1` | version `0x01` |
-| `5` | `1` | packet_type `0x01` |
-| `6` | `16` | session_id |
+Both roles should send UDP `heartbeat` packets periodically from their registered socket, for example every 5000 ms. There is no response.
 
-Total size: `22` bytes.
+A valid registration, UDP heartbeat, or publisher audio packet refreshes UDP activity. Forwarded audio and TCP heartbeats do not; subscribers must send their own UDP heartbeats.
 
-After a successful TCP handshake, every publisher and subscriber must send `register` from its UDP socket to the server UDP port.
+An endpoint expires after more than 15000 ms without valid UDP activity. Until it registers again, the server rejects its heartbeats and audio and stops forwarding audio to it. UDP expiry does not end the TCP session.
 
-Server behavior:
+### Audio packets
 
-- If `session_id` is known and its TCP control session is still alive, the server binds the session to the UDP source IP and source port.
-- The server replies to the same UDP endpoint with `register_ack`.
-- If `session_id` is unknown or the TCP session has already ended, registration is rejected and no `register_ack` is sent.
-- A later valid `register` from the same live session updates the UDP endpoint. This is how clients recover after their UDP source port changes.
-
-### UDP Register Ack
-
-Register ack packet layout:
-
-| Offset | Size | Field |
-| --- | ---: | --- |
-| `0` | `4` | magic `RAS1` |
-| `4` | `1` | version `0x01` |
-| `5` | `1` | packet_type `0x02` |
-| `6` | `16` | session_id |
-
-Total size: `22` bytes.
-
-Client behavior:
-
-- Do not send audio as a publisher until `register_ack` has been received.
-- Do not treat a subscriber as ready to receive until `register_ack` has been received.
-- If the UDP source port changes, send `register` again and wait for a new `register_ack`.
-
-### UDP Heartbeat
-
-Heartbeat packet layout:
-
-| Offset | Size | Field |
-| --- | ---: | --- |
-| `0` | `4` | magic `RAS1` |
-| `4` | `1` | version `0x01` |
-| `5` | `1` | packet_type `0x03` |
-| `6` | `16` | session_id |
-
-Total size: `22` bytes.
-
-Behavior:
-
-- Publishers and subscribers should send UDP heartbeat packets periodically.
-- The server does not send a UDP heartbeat response.
-- The heartbeat must come from the currently registered UDP source endpoint.
-- If the registered UDP endpoint is inactive for `15000ms`, it is treated as expired.
-- After expiry or source port change, send `register` again and wait for `register_ack`.
-
-### UDP Audio Data
-
-Audio packet layout:
+`audio_data` adds the following fields to the common header:
 
 | Offset | Size | Field | Encoding |
 | --- | ---: | --- | --- |
-| `0` | `4` | magic | ASCII `RAS1` |
-| `4` | `1` | version | `0x01` |
-| `5` | `1` | packet_type | `0x04` |
-| `6` | `16` | session_id | 16 raw bytes |
-| `22` | `8` | sequence | big-endian `u64` |
-| `30` | `8` | timestamp_ms | big-endian `u64` |
-| `38` | `N` | payload | opaque client-defined audio bytes |
+| 22 | 8 | `sequence` | Big-endian unsigned 64-bit integer |
+| 30 | 8 | `timestamp_ms` | Big-endian unsigned 64-bit integer, milliseconds |
+| 38 | 0–1200 | `payload` | Client-defined audio bytes |
 
-Minimum size: `38` bytes.
+Only a live `publisher` session may send audio, from its registered, unexpired source IP address and port.
 
-Maximum payload size: `1200` bytes.
+The server forwards audio only to registered, unexpired subscribers on the same `(key, stream)`. It preserves `sequence`, `timestamp_ms`, and `payload`, and replaces `session_id` with the recipient's ID, which subscribers should verify. Audio format and sequence/timestamp progression are not checked.
 
-Maximum UDP packet size used by the server receive buffer: `1400` bytes.
-
-Publisher-to-server rules:
-
-- Only a `publisher` session may send `audio_data`.
-- The TCP control session must still be alive.
-- The publisher UDP endpoint must have successfully registered.
-- The packet must come from the same UDP source IP and port that registered the session.
-- `session_id` must be the publisher session id.
-- `sequence`, `timestamp_ms`, and `payload` are opaque to the server except for size and layout checks.
-
-Server-to-subscriber forwarding rules:
-
-- The server forwards only to active subscriber UDP endpoints registered for the same `(key, stream)`.
-- The forwarded packet keeps `sequence` unchanged.
-- The forwarded packet keeps `timestamp_ms` unchanged.
-- The forwarded packet keeps `payload` unchanged.
-- The forwarded packet replaces `session_id` with the target subscriber session id.
-
-The server does not acknowledge audio packets and does not retransmit dropped packets.
-
-## Required Client Flows
-
-### Publisher Flow
-
-1. Open TCP connection to the control port.
-2. Send handshake JSON line: `{"role":"publisher","key":"...","stream":"..."}`.
-3. Read one JSON line response.
-4. Verify `status == "ok"`.
-5. Save `session_id`, `udp_port`, `tcp_heartbeat_interval_ms`, `udp_session_timeout_ms`, and `udp_audio_payload_max_bytes`.
-6. Open a UDP socket.
-7. Send UDP `register` using the 16-byte session id.
-8. Wait for `register_ack`.
-9. Keep sending TCP heartbeat on the TCP control connection.
-10. Keep sending UDP heartbeat from the registered UDP socket.
-11. Send UDP `audio_data` from the same UDP socket.
-
-### Subscriber Flow
-
-1. Open TCP connection to the control port.
-2. Send handshake JSON line: `{"role":"subscriber","key":"...","stream":"..."}`.
-3. Read one JSON line response.
-4. Verify `status == "ok"`.
-5. Save `session_id`, `udp_port`, `tcp_heartbeat_interval_ms`, and `udp_session_timeout_ms`.
-6. Open a UDP socket.
-7. Send UDP `register` using the 16-byte session id.
-8. Wait for `register_ack`.
-9. Keep sending TCP heartbeat on the TCP control connection.
-10. Keep sending UDP heartbeat from the registered UDP socket.
-11. Read UDP `audio_data`.
-12. Verify incoming forwarded `audio_data` uses the subscriber's own session id.
+Audio packets receive no acknowledgment and are not retransmitted. Packets can be dropped when the dispatch queue is full; delivery and ordering are not guaranteed.
 
 ## Status API
 
-`stream_count` and the entries in `streams` count each independent `(key, stream)` pair. A single key can therefore contribute up to three stream entries.
-
-The status API uses a separate TCP port.
-
-Send one JSON line:
+Send this request to the status port. The access key is fixed:
 
 ```json
 {"key":"audiostatus"}
 ```
 
-Successful response is one JSON line containing a `RegistrySnapshot` object:
+The server returns one JSON line and closes the connection. Responses contain channel keys; restrict access to trusted hosts.
+
+Successful response (expanded for readability):
 
 ```json
 {
@@ -373,56 +192,50 @@ Successful response is one JSON line containing a `RegistrySnapshot` object:
 }
 ```
 
-Invalid status key response:
+### Snapshot fields
+
+| Field | Meaning |
+| --- | --- |
+| `generated_at_unix_ms` | Snapshot time, Unix milliseconds |
+| `stream_count`, `streams` | Current `(key, stream)` entries; one key can have up to three |
+| `active_publisher_count`, `active_subscriber_count` | Sessions with a live TCP control connection |
+| `active_udp_publisher_count`, `active_udp_subscriber_count` | Sessions with a registered, unexpired UDP endpoint |
+| `invalid_udp_packets_total` | Malformed UDP packets and unexpected client-sent `register_ack` packets |
+| `unknown_udp_session_packets_total` | Register, heartbeat, or audio packets with an unknown session ID |
+
+The two global UDP error counters accumulate for the server process lifetime. Wrong-role, unregistered, mismatched, or expired endpoint rejections are logged but do not increment those counters.
+
+### Per-stream fields
+
+| Field | Meaning |
+| --- | --- |
+| `key`, `stream` | Routing pair |
+| `publisher_control_connected`, `subscriber_count` | Current publisher presence and subscriber count over TCP |
+| `publisher_udp_registered`, `subscriber_udp_registered_count` | Current unexpired UDP registrations |
+| `publisher_connections_total`, `subscriber_connections_total` | Control session registrations |
+| `publisher_tcp_heartbeats_total`, `subscriber_tcp_heartbeats_total` | Accepted TCP heartbeats |
+| `publisher_udp_registers_total`, `subscriber_udp_registers_total` | Accepted UDP registrations, including re-registration |
+| `publisher_udp_heartbeats_total`, `subscriber_udp_heartbeats_total` | Accepted UDP heartbeats |
+| `udp_audio_packets_in_total`, `udp_audio_bytes_in_total` | Accepted publisher audio packets and payload bytes |
+| `udp_audio_packets_out_total`, `udp_audio_bytes_out_total` | Successfully sent audio packets and payload bytes, counted per recipient |
+| `udp_send_errors_total` | Registration acknowledgment send failures and audio forwarding errors; queue overflow counts each skipped recipient |
+| `last_activity_unix_ms` | Last recorded stream activity, Unix milliseconds |
+| `last_publisher_disconnect_reason`, `last_subscriber_disconnect_reason` | Latest disconnect reason for each role, omitted if none; common values are `peer_disconnected`, `timeout`, and `protocol_error` |
+
+Byte counters exclude protocol headers. Successful UDP sends do not confirm receipt. A stream and its counters are removed when its last TCP session disconnects.
+
+### Errors and response size
+
+Wrong access key:
 
 ```json
 {"status":"error","message":"invalid status key"}
 ```
 
-Invalid status request response:
+Malformed, oversized, or timed-out request:
 
 ```json
 {"status":"error","message":"invalid status request"}
 ```
 
-Status client requirements:
-
-- Send exactly one JSON line ending in `\n`.
-- Request size must not exceed `1024` bytes.
-- Read one full JSON line until newline.
-- Do not assume the response fits in 4 KB. Large deployments can produce much larger snapshots.
-
-## Error And Recovery Guidance
-
-Recommended client behavior:
-
-- If TCP control disconnects, treat the whole session as invalid and start from TCP handshake again.
-- If UDP `register_ack` is not received, retry `register` with backoff while keeping TCP alive.
-- If the UDP source port changes, send `register` again and wait for `register_ack`.
-- If subscriber audio stops but TCP is still alive, continue TCP and UDP heartbeat, and re-register UDP if the client suspects NAT or port changes.
-- If the server rejects or ignores UDP audio, verify role, session id, and UDP source endpoint binding.
-
-## Minimal UDP Encoding Reference
-
-Pseudo-code for a UDP audio packet:
-
-```text
-packet = bytes()
-packet += ASCII("RAS1")
-packet += u8(1)
-packet += u8(0x04)
-packet += session_id_16_bytes
-packet += u64_be(sequence)
-packet += u64_be(timestamp_ms)
-packet += payload
-```
-
-Pseudo-code for a UDP register packet:
-
-```text
-packet = bytes()
-packet += ASCII("RAS1")
-packet += u8(1)
-packet += u8(0x01)
-packet += session_id_16_bytes
-```
+Read through the newline. The server has no fixed response size limit; the load test reader allows 16 MiB (16777216 bytes).
